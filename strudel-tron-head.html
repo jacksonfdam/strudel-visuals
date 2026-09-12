@@ -1,0 +1,550 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>strudel × tron — head-steered ascii corridor</title>
+<style>
+  :root{--ink:#03060c;--glyph:#7df9ff;--hot:#ff3c00;--dim:#123a44}
+  html,body{margin:0;height:100%;background:var(--ink);color:var(--glyph);
+    font:12px/1.45 "IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;overflow:hidden}
+  #bg{position:fixed;inset:-10%;z-index:0;filter:blur(50px)}
+  #stage{position:fixed;inset:0;z-index:1}
+  #stage table{background:transparent !important}
+  #crt{position:fixed;inset:0;z-index:2;pointer-events:none;
+    background:repeating-linear-gradient(0deg,rgba(0,0,0,.2) 0 1px,transparent 1px 3px),radial-gradient(ellipse at center,transparent 55%,rgba(0,0,0,.75) 100%)}
+  #arrow{position:fixed;z-index:3;left:50%;top:38%;transform:translate(-50%,-50%);font-size:min(22vw,180px);line-height:1;
+    color:var(--hot);pointer-events:none;text-shadow:0 0 30px var(--hot);opacity:0;transition:opacity .15s;white-space:pre;text-align:center}
+  #arrow small{display:block;font-size:14px;letter-spacing:.3em;margin-top:8px}
+  .hud{position:fixed;z-index:3;pointer-events:none;white-space:pre;opacity:.9;color:var(--hot)}
+  .hud.tl{top:16px;left:18px} .hud.tr{top:16px;right:18px;text-align:right}
+  .hud b{font-weight:400;color:var(--glyph)}
+  #camWrap{position:fixed;z-index:3;left:18px;bottom:16px;width:180px;aspect-ratio:4/3;border:1px solid var(--dim)}
+  #cam{width:100%;height:100%;object-fit:cover;transform:scaleX(-1);opacity:.45;filter:grayscale(1)}
+  #face{position:absolute;inset:0;width:100%;height:100%}
+  #glitch{position:fixed;inset:0;z-index:4;pointer-events:none;background:var(--hot);opacity:0;mix-blend-mode:difference}
+  #sub{position:fixed;z-index:4;left:50%;bottom:22%;transform:translateX(-50%);max-width:70vw;text-align:center;pointer-events:none;
+    font-size:clamp(16px,2.6vw,30px);letter-spacing:.18em;color:var(--hot);text-shadow:0 0 18px var(--hot),2px 0 #0ff,-2px 0 #f0f;opacity:0;transition:opacity .2s;white-space:pre-wrap}
+  /* start / game-over overlay */
+  #gate{position:fixed;inset:0;z-index:6;display:flex;align-items:center;justify-content:center;background:rgba(3,6,12,.92)}
+  #gate .box{width:min(520px,90vw);border:1px solid var(--dim);padding:28px;text-align:center}
+  #gate h1{font-weight:400;letter-spacing:.35em;font-size:20px;margin:0 0 18px;color:var(--glyph)}
+  #gate p{color:var(--dim);margin:6px 0 18px;line-height:1.7}
+  #gate input{font:inherit;font-size:18px;text-align:center;background:transparent;color:var(--glyph);border:0;border-bottom:1px solid var(--glyph);padding:8px;width:70%;outline:none;letter-spacing:.2em}
+  #gate button{margin-top:22px}
+  #panel{position:fixed;z-index:5;right:16px;bottom:16px;width:min(620px,calc(100vw - 32px));background:rgba(3,6,12,.86);border:1px solid var(--dim);padding:10px 12px}
+  #panel textarea{width:100%;box-sizing:border-box;height:120px;resize:vertical;background:transparent;color:var(--glyph);border:0;outline:none;font:inherit;line-height:1.5}
+  .row{display:flex;gap:10px;align-items:center;margin-top:8px;flex-wrap:wrap}
+  .row h4{margin:0;font-weight:400;color:var(--dim);width:100%;font-size:11px;letter-spacing:.04em}
+  button{font:inherit;background:transparent;color:var(--hot);border:1px solid var(--hot);padding:4px 12px;cursor:pointer}
+  button:hover,button:focus-visible{background:var(--hot);color:var(--ink);outline:none}
+  button.quiet{color:var(--dim);border-color:var(--dim)}
+  #status{color:var(--dim);margin-left:auto}
+  label{display:flex;align-items:center;gap:6px;color:var(--dim)}
+  label.slide{flex:1;min-width:140px}
+  label b{font-weight:400;color:var(--hot);min-width:3.5ch;text-align:right}
+  input[type=range]{flex:1;accent-color:var(--hot);height:2px;margin:0}
+  input[type=checkbox]{accent-color:var(--hot);margin:0}
+  input[type=text],select{font:inherit;background:var(--ink);color:var(--glyph);border:1px solid var(--dim);padding:3px 6px}
+  #panel.folded textarea,#panel.folded .row.fx{display:none}
+</style>
+</head>
+<body>
+<div id="bg"></div>
+<div id="stage"></div>
+<div id="crt"></div>
+<div id="arrow"></div>
+<div id="glitch"></div>
+<div id="sub"></div>
+<div class="hud tl" id="hudL"></div>
+<div class="hud tr" id="hudR"></div>
+<div id="camWrap"><video id="cam" autoplay muted playsinline></video><canvas id="face"></canvas></div>
+
+<div id="gate">
+  <div class="box">
+    <h1>THE CORRIDOR</h1>
+    <p>it needs to know who is looking.<br>type your name. keep your eyes on the screen.<br>turn your head left or right to change lane.</p>
+    <input id="name" type="text" maxlength="18" autocomplete="off" placeholder="your name">
+    <br><button id="enter">enter</button>
+  </div>
+</div>
+
+<script type="text/plain" data-track="corridor (built-in)">
+setcpm(128/4)
+stack(
+  s("bd*4").bank("RolandTR909").gain(.9),
+  s("[~ hh]*4").bank("RolandTR909").gain(.35).hpf(4000),
+  s("~ cp ~ ~").bank("RolandTR909").room(.4).gain(.5),
+  note("<a1 a1 c2 g1>*8").s("sawtooth").dec(.12).lpf(sine.range(300,1800).slow(8)).gain(.7),
+  note("<a3 c4 e4 g4>*16").s("square").dec(.05).gain(.18).pan(sine.slow(4)).delay(.3).delaytime(.375),
+  note("<a2 c3>").s("triangle").att(.8).rel(2).gain(.3).room(.9).lpf(600),
+)
+</script>
+<script type="text/plain" data-track="New Order – Blue Monday (cover by Lewis, bakery)">
+setcpm(130/4)
+const kick1 = sound("<[bd bd [bd*4] [bd*4]] [bd*4]>").bank("linn").decay(0.15)
+const kick2 = sound("[bd*4]").bank("linn").decay(.15)
+const hats1 = sound("[oh oh*2]*4").bank("dmx").decay(.1).gain(.12)
+const hats2 = sound("[- oh]*4").bank("dmx").decay(.2).sustain(0.1).gain(.12)
+const snare = stack(sound("[- sd]*2").bank("linn").gain(.5), sound("[- cp]*2").bank("linn").gain(.1))
+const drums1 = stack(kick1,hats1,snare)
+const drums2 = stack(kick2,hats2,snare)
+const drums3 = stack(sound("bd bd bd bd -").bank("linn").decay(0.15), sound("oh oh oh oh -").bank("dmx").decay(0.2).sustain(0.1).gain(0.2))
+const bass1 = stack(note("<<[f1 f2*2]*2 [g1 g2*2]*2> [c1 c2*2]*2 [d1 d2*2]*2 [d1 d2*2]*2>*2")).sound("<sine, gm_synth_bass_1>").decay(.2).sustain(.1)
+const bass2 = stack(note("<<[f1 f2]*2 [g1 g2]*2> [c1 c2]*2 [d1 d2]*2 [d1 d2]*2>*2")).sound("<sine, gm_synth_bass_1>").decay(.2).sustain(.4)
+const synth = stack(n("<[[2 ~] [2 ~] 2 3] [[3 ~] [3 ~] 3 3]>@4 [-1 ~] -1 -1 [0 ~] 0 0 [0 ~] 0 0 [0 ~] 0 0")).sound("<gm_lead_2_sawtooth>").slow(2).scale("d4:minor").attack(.05).hpf("<1000 2000>*12").gain(".4")
+stack(
+  arrange([16,kick1],[16,drums1],[2,drums3],[16,drums2],[1,silence]).room(0.1),
+  arrange([8,silence],[24,synth],[19,silence]).room(0.05),
+  arrange([16,silence],[16,bass1],[2,silence],[16,bass2],[1,silence])
+)
+</script>
+<script type="text/plain" data-track="eddyflux – tupper class (bakery)">
+setcps(68/60/4)
+stack(
+  s("loop4/4").fit().layer(
+    x=>x.chop("64 [32 64]").juxBy(.6, rev).hpf(500).dec(sine.range(.05,.18).slow(8)).room(.5).sometimes(mul(speed("2 | -2"))).shape(.6).postgain(sine.range(0,.8).slow(16)),
+    x=>x.chop(64).lpf(400).shape(.6).cut(4).dec(.2).postgain(.9).mask("<0!4 1!16>")
+  ),
+  s("riffin").fit().shape(.2).chop(32).dec(.1).postgain(.6)
+    .sometimesBy("0 [0 .5] 0 0", x=>x.set.squeeze(gain(".9 .6 .2 .1")).room(.3))
+    .sometimesBy("0 [0  0] 0 .5", x=>x.mul(speed("-2"))).hurry("<.5!4 1!16>"),
+  s("useme/2").fit().chop("<16 32>/32").sometimesBy("0 [.2 0]",ply("3")).dec(.19).room(.4).cut(9).hpf(800).mask("[1!4 0 1 1 0]*2"),
+  s("[bd rim:1 [~ bd] rim:2]*2").bank('crate')
+).reset("<x@3 x*[4 [8 [16 32]]] x@16>").late("[0 .002]*16")
+</script>
+
+<div id="panel">
+  <textarea id="code" spellcheck="false"></textarea>
+  <div class="row">
+    <label>track <select id="track"></select></label>
+    <button id="prev" class="quiet">‹</button><button id="next" class="quiet">›</button>
+    <label><input type="checkbox" id="speedTempo" checked> speed → tempo</label>
+    <input type="text" id="addUrl" placeholder="strudel.cc link / #hash" style="flex:1;min-width:160px">
+    <button id="addBtn" class="quiet">Add</button>
+  </div>
+  <div class="row fx">
+    <h4>head</h4>
+    <label class="slide">turn threshold <input id="thr" type="range" min=".05" max=".5" step=".01" value=".18"> <b id="thrV">.18</b></label>
+    <label><input type="checkbox" id="invertTurn"> invert</label>
+    <label><input type="checkbox" id="asciiColor"> ascii colour (heavy)</label>
+    <label class="slide">start speed <input id="spd" type="range" min="10" max="60" step="1" value="22"> <b id="spdV">22</b></label>
+    <h4>voice / ambient fx (headphones)</h4>
+    <label><input type="checkbox" id="monitor"> monitor</label>
+    <label class="slide">drive <input id="drive" type="range" min="0" max="1" step=".05" value=".6"> <b id="driveV">.6</b></label>
+    <label class="slide">delay <input id="delay" type="range" min="0" max="1" step=".05" value=".3"> <b id="delayV">.3</b></label>
+    <label class="slide">feedback <input id="fb" type="range" min="0" max=".95" step=".05" value=".55"> <b id="fbV">.55</b></label>
+    <label class="slide">narrator pitch <input id="npitch" type="range" min="0" max="1" step=".05" value=".15"> <b id="npitchV">.15</b></label>
+    <h4>narrator</h4>
+    <label><input type="checkbox" id="narrOn" checked> speech</label>
+    <label><input type="checkbox" id="subOn" checked> subtitles</label>
+    <label><input type="checkbox" id="whispOn" checked> background whispers</label>
+    <label class="slide">whisper density <input id="whispDen" type="range" min="0" max="1" step=".05" value=".4"> <b id="whispDenV">.4</b></label>
+    <label class="slide">volume <input id="nvol" type="range" min="0" max="1" step=".05" value="1"> <b id="nvolV">1</b></label>
+    <label>voice <select id="voiceSel"><option value="">auto</option></select></label>
+    <button id="narrTest" class="quiet">Test voice</button>
+    <button id="narrReset" class="quiet">Restart narration</button>
+  </div>
+  <div class="row">
+    <button id="camBtn">Camera</button>
+    <button id="micBtn">Mic</button>
+    <button id="play">Play</button>
+    <button id="stop" class="quiet">Stop</button>
+    <button id="restart" class="quiet">Restart</button>
+    <button id="fold" class="quiet">Hide code</button>
+    <span id="status">loading…</span>
+  </div>
+</div>
+
+<script>
+(() => { const orig = AudioNode.prototype.connect;
+  AudioNode.prototype.connect = function (dest, ...rest) {
+    if (dest instanceof AudioDestinationNode && window.__tap && this !== window.__tap && !this.__isFx) { try { orig.call(this, window.__tap); } catch (_) {} }
+    return orig.call(this, dest, ...rest); }; })();
+</script>
+<script type="importmap">
+{ "imports": {
+  "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
+  "@mediapipe/tasks-vision": "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs"
+}}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { AsciiEffect } from 'three/addons/effects/AsciiEffect.js';
+import { FaceLandmarker, FilesetResolver } from '@mediapipe/tasks-vision';
+
+const $ = id => document.getElementById(id);
+const lerp = (a, b, k) => a + (b - a) * k, clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const status = $('status');
+
+/* ---------- load strudel: local copy first (enables the SharedWorker clock), CDN fallback ---------- */
+const loadScript = src => new Promise((ok, fail) => { const el = document.createElement('script'); el.src = src; el.onload = ok; el.onerror = fail; document.head.appendChild(el); });
+let LOCAL_STRUDEL = false, WORKER_OK = false;
+// vendor/ is a committed copy of @strudel/web (AGPL-3.0, see THIRD_PARTY.md) so static hosts like Vercel
+// can serve it same-origin; the worker is requested from the site root (/assets/…) — package.json copies both.
+for (const src of ['./vendor/strudel-web/index.js', './node_modules/@strudel/web/dist/index.js']) {
+  try { await loadScript(src); LOCAL_STRUDEL = true; break; } catch (_) {}
+}
+if (LOCAL_STRUDEL) { try { WORKER_OK = (await fetch('/assets/clockworker--4w5RvGG.js', { method: 'HEAD' })).ok; } catch (_) {} }
+else await loadScript('https://unpkg.com/@strudel/web@1.1.0');
+
+/* ---------- shared live state ---------- */
+window.head  = { present: false, yaw: 0, pitch: 0, looking: false, lane: 0 };
+window.mic   = { level: 0, on: false };
+window.audio = { bass: 0, mid: 0, high: 0, level: 0 };
+window.game  = { name: '', speed: 22, score: 0, lives: 3, running: false, over: false, hits: 0 };
+
+/* ---------- playlist ---------- */
+const playlist = [...document.querySelectorAll('script[data-track]')].map(s => ({ title: s.dataset.track, code: s.textContent.trim() }));
+let cur = 0; const codeEl = $('code'), trackSel = $('track');
+const refreshList = () => trackSel.innerHTML = playlist.map((p, i) => `<option value="${i}" ${i === cur ? 'selected' : ''}>${i + 1}. ${p.title}</option>`).join('');
+function load(i, autoplay = false) { cur = (i + playlist.length) % playlist.length; codeEl.value = playlist[cur].code; refreshList(); if (autoplay) $('play').click(); }
+load(0);
+function decodeShare(s) { const h = s.includes('#') ? s.slice(s.indexOf('#') + 1) : s; const bin = atob(decodeURIComponent(h)); try { return decodeURIComponent(escape(bin)); } catch (_) { return bin; } }
+$('addBtn').onclick = () => { try { const code = decodeShare($('addUrl').value.trim()); const m = code.match(/@title\s+([^\n*]+)/) || code.match(/^\/\/\s*(.+)$/m);
+  playlist.push({ title: (m ? m[1].trim() : 'untitled') + ' (added)', code }); $('addUrl').value = ''; load(playlist.length - 1); } catch (err) { status.textContent = 'decode: ' + err.message; } };
+const BANKS = { linn: 'LinnDrum', dmx: 'OberheimDMX', tr909: 'RolandTR909', tr808: 'RolandTR808', tr707: 'RolandTR707', tr606: 'RolandTR606', tr505: 'RolandTR505',
+  mpc60: 'AkaiMPC60', sp12: 'EmuSP12', dr55: 'BossDR55', dr110: 'BossDR110', rx5: 'YamahaRX5', rx21: 'YamahaRX21', hr16: 'AlesisHR16', sr16: 'AlesisSR16',
+  cr78: 'RolandCompurhythm78', m1: 'KorgM1', r8: 'RolandR8', sds5: 'SimmonsSDS5', drumtracks: 'SequentialCircuitsDrumtracks', rz1: 'CasioRZ1', xr10: 'AkaiXR10' };
+const adapt = code => code
+  .replace(/\.\_?(pianoroll|punchcard|scope|spiral|pitchwheel|spectrum|wordfall|markcss|tscope|fscope)\([^)]*\)/g, '')
+  .replace(/gm_[a-z0-9_]+/g, n => /saw|lead|bass|brass|guitar/.test(n) ? 'sawtooth' : /square|organ|clav/.test(n) ? 'square' : 'triangle')
+  .replace(/\.bank\((["'])([a-z0-9]+)\1\)/gi, (m, q, b) => BANKS[b.toLowerCase()] ? `.bank(${q}${BANKS[b.toLowerCase()]}${q})` : m)
+  .replace(/^\s*samples\([^)]*\)\s*$/gm, '');
+let baseCps = null;   // tempo the track set for itself; speed scales it
+
+/* ---------- three.js: the corridor ---------- */
+const renderer = new THREE.WebGLRenderer({ antialias: false });
+let effect = makeEffect($('asciiColor')?.checked ?? false);
+function makeEffect(color) {
+  const e = new AsciiEffect(renderer, ' .:-=+*#%@', { invert: true, resolution: color ? .12 : .14, color });
+  e.domElement.style.backgroundColor = 'transparent'; e.__color = color; return e;
+}
+$('stage').appendChild(effect.domElement);
+$('asciiColor').addEventListener('change', e => { $('stage').removeChild(effect.domElement); effect = makeEffect(e.target.checked); $('stage').appendChild(effect.domElement); resize(); });
+const scene = new THREE.Scene();
+scene.fog = new THREE.FogExp2(0x000000, .028);
+const camera = new THREE.PerspectiveCamera(70, 1, .1, 200); camera.position.set(0, 1.6, 0);
+
+const LANE_W = 3.2, DEPTH = 110;
+const colA = new THREE.Color('#7df9ff'), colB = new THREE.Color('#ff3c00'), colC = new THREE.Color('#c05bff');
+const lineMat = new THREE.LineBasicMaterial({ color: colA.clone() });
+const wallMat = new THREE.LineBasicMaterial({ color: colC.clone() });
+// floor grid: lane lines + moving cross lines
+const floor = new THREE.Group(); scene.add(floor);
+for (let i = -2; i <= 2; i++) {
+  const g = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(i * LANE_W, 0, 2), new THREE.Vector3(i * LANE_W, 0, -DEPTH)]);
+  floor.add(new THREE.Line(g, lineMat));
+}
+const cross = [];
+for (let i = 0; i < 28; i++) {
+  const g = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(-2 * LANE_W, 0, 0), new THREE.Vector3(2 * LANE_W, 0, 0)]);
+  const l = new THREE.Line(g, lineMat); l.position.z = -i * 4; floor.add(l); cross.push(l);
+}
+// walls: vertical ribs
+const ribs = [];
+for (let i = 0; i < 28; i++) for (const side of [-1, 1]) {
+  const g = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(side * 2 * LANE_W, 0, 0), new THREE.Vector3(side * 2 * LANE_W, 5, 0), new THREE.Vector3(side * 1.4 * LANE_W, 6.5, 0)]);
+  const l = new THREE.Line(g, wallMat); l.position.z = -i * 4; scene.add(l); ribs.push(l);
+}
+// blocks
+const blockGeo = new THREE.BoxGeometry(LANE_W * .85, 2.6, 2.4);
+const blockEdges = new THREE.EdgesGeometry(blockGeo);
+const blocks = [];
+function spawnBlock(lane, z) {
+  const m = new THREE.Mesh(blockGeo, new THREE.MeshBasicMaterial({ color: colB.clone() }));
+  const e = new THREE.LineSegments(blockEdges, new THREE.LineBasicMaterial({ color: 0xffffff }));
+  m.add(e); m.position.set(lane * LANE_W, 1.3, z); m.userData = { lane, passed: false }; scene.add(m); blocks.push(m);
+}
+let nextSpawnZ = -50;
+
+/* ---------- face tracking ---------- */
+const video = $('cam'), faceCv = $('face'), fctx = faceCv.getContext('2d');
+let faces = null, lastT = -1, faceRes = null;
+async function startCamera() {
+  $('camBtn').disabled = true; status.textContent = 'loading face model…';
+  if (!faces) {
+    const vision = await FilesetResolver.forVisionTasks('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm');
+    faces = await FaceLandmarker.createFromOptions(vision, {
+      baseOptions: { modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task', delegate: 'GPU' },
+      runningMode: 'VIDEO', numFaces: 1, outputFaceBlendshapes: true,
+    });
+  }
+  video.srcObject = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480, facingMode: 'user' } });
+  await video.play(); faceCv.width = 180; faceCv.height = 135;
+  $('camBtn').textContent = 'Camera on'; status.textContent = 'tracking your head';
+}
+let lastSeen = 0, lastTrack = 0;
+function track(t) {
+  if (!faces || !video.srcObject || video.readyState < 2 || video.currentTime === lastT || t - lastTrack < .066) return;
+  lastT = video.currentTime; lastTrack = t;
+  faceRes = faces.detectForVideo(video, performance.now());
+  const F = faceRes.faceLandmarks;
+  head.present = F.length > 0;
+  if (!F.length) { head.looking = false; return; }
+  lastSeen = t;
+  const lm = F[0], le = lm[33], re = lm[263], nose = lm[1], chin = lm[152], brow = lm[10];
+  const mid = { x: (le.x + re.x) / 2, y: (le.y + re.y) / 2 }, eyeD = Math.hypot(re.x - le.x, re.y - le.y) || .1;
+  // yaw: nose offset from the eye midpoint, in eye-distance units; mirrored so right = +
+  let yaw = -(nose.x - mid.x) / eyeD * 2; if ($('invertTurn').checked) yaw = -yaw;
+  head.yaw = lerp(head.yaw, yaw, .35);
+  head.pitch = lerp(head.pitch, ((nose.y - mid.y) / Math.hypot(chin.x - brow.x, chin.y - brow.y)) - .3, .3);
+  // eyes: blendshapes eyeLookOut/In tell if the gaze leaves even when the head is still
+  const bs = faceRes.faceBlendshapes?.[0]?.categories; let gaze = 0;
+  if (bs) { const g = n => bs.find(c => c.categoryName === n)?.score ?? 0; gaze = Math.max(g('eyeLookOutLeft'), g('eyeLookOutRight'), g('eyeLookInLeft'), g('eyeLookInRight'), g('eyeLookDownLeft'), g('eyeLookUpLeft')); }
+  head.looking = Math.abs(head.yaw) < .9 && Math.abs(head.pitch) < .45 && gaze < .75;
+  // lane from yaw with hysteresis
+  const thr = +$('thr').value;
+  if (head.yaw > thr) head.lane = 1; else if (head.yaw < -thr) head.lane = -1; else if (Math.abs(head.yaw) < thr * .5) head.lane = 0;
+  // small overlay
+  fctx.clearRect(0, 0, 180, 135); fctx.fillStyle = head.looking ? '#7df9ff' : '#ff3c00';
+  for (const i of [1, 33, 263, 61, 291, 152, 10]) fctx.fillRect((1 - lm[i].x) * 180 - 1.5, lm[i].y * 135 - 1.5, 3, 3);
+  fctx.strokeStyle = fctx.fillStyle; fctx.beginPath(); fctx.moveTo(90, 128); fctx.lineTo(90 + head.yaw * 60, 128); fctx.lineWidth = 3; fctx.stroke();
+}
+
+/* ---------- narrator (distorted TTS + stinger) ---------- */
+let ac, tap, freq, micA, micWave, fx = null;
+function ensureAudio() { if (ac || !window.getAudioContext) return; ac = getAudioContext(); tap = ac.createAnalyser(); tap.fftSize = 1024; tap.smoothingTimeConstant = .8; freq = new Uint8Array(tap.frequencyBinCount); window.__tap = tap; }
+/* narrator: queue with priorities. Chrome quirks handled: utterances kept referenced (onend is
+   lost on GC'd utterances), resume() before speak(), a 180 ms gap after cancel() (speak() right
+   after cancel() is silently dropped), and a watchdog that clears `speaking` if onend never comes. */
+let speaking = false, speakUntil = 0, speakTimer = 0; const sayQueue = [], keepAlive = [];
+const subEl = $('sub'); let subTimer = 0;
+function subtitle(text) { if (!$('subOn').checked) return; subEl.textContent = text; subEl.style.opacity = 1; clearTimeout(subTimer); subTimer = setTimeout(() => subEl.style.opacity = 0, 1200 + text.length * 90); }
+function say(text, { stutter = false, priority = 1 } = {}) {   // priority: 0 idle, 1 normal, 2 must
+  if (stutter && game.name) { const n = game.name; text = text.replace(n, `${n[0]}-${n[0]}-${n}`); }
+  if (priority === 0 && (speaking || sayQueue.length)) return;             // idle lines never pile up
+  if (priority === 2) { sayQueue.length = 0; if (window.speechSynthesis) speechSynthesis.cancel(); speaking = false; clearTimeout(speakTimer); speakTimer = setTimeout(pumpSpeech, 180); }
+  sayQueue.push(text); if (sayQueue.length > 3) sayQueue.shift();
+  if (priority !== 2) pumpSpeech();
+}
+function pickVoice() {
+  const vs = speechSynthesis.getVoices(), want = $('voiceSel').value;
+  if (want) return vs.find(v => v.voiceURI === want) || null;
+  return vs.find(x => /^en/i.test(x.lang) && /male|david|daniel|alex|uk english male/i.test(x.name)) || vs.find(x => /^en/i.test(x.lang)) || vs[0] || null;
+}
+function pumpSpeech() {
+  if (speaking || !sayQueue.length) return;
+  const text = sayQueue.shift();
+  subtitle(text); stinger();
+  if (!$('narrOn').checked || !('speechSynthesis' in window)) return;
+  const u = new SpeechSynthesisUtterance(text); keepAlive.push(u); if (keepAlive.length > 8) keepAlive.shift();
+  const p = +$('npitch').value; u.pitch = clamp(p + (Math.random() - .5) * .1, 0, 2); u.rate = .55 + Math.random() * .3; u.volume = +$('nvol').value;
+  const v = pickVoice(); if (v) { u.voice = v; u.lang = v.lang; }
+  speaking = true; speakUntil = performance.now() + 1500 + text.length * 140;     // watchdog deadline
+  u.onend = u.onerror = () => { speaking = false; setTimeout(pumpSpeech, 250); };
+  try { speechSynthesis.resume(); speechSynthesis.speak(u); } catch (_) { speaking = false; }
+}
+function speechWatchdog() { if (speaking && performance.now() > speakUntil) { speaking = false; pumpSpeech(); } }
+function resetNarration() { sayQueue.length = 0; speaking = false; clearTimeout(speakTimer); if (window.speechSynthesis) { speechSynthesis.cancel(); speechSynthesis.resume(); } status.textContent = 'narration reset'; }
+function fillVoices() {
+  if (!('speechSynthesis' in window)) return;
+  const vs = speechSynthesis.getVoices(); if (!vs.length) return;
+  const sel = $('voiceSel'), cur = sel.value;
+  sel.innerHTML = '<option value="">auto</option>' + vs.filter(v => /^(en|pt)/i.test(v.lang)).map(v => `<option value="${v.voiceURI}">${v.name} (${v.lang})</option>`).join('');
+  sel.value = cur;
+}
+if ('speechSynthesis' in window) { fillVoices(); speechSynthesis.onvoiceschanged = fillVoices; }
+// Chrome stops long/idle sessions unless it is nudged: a pause/resume heartbeat every 10 s while speaking
+setInterval(() => { if (speaking && window.speechSynthesis) { speechSynthesis.pause(); speechSynthesis.resume(); } }, 10000);
+
+/* background whispers: filtered noise shaped like breathy syllables, panned around the head */
+let whispTimer = 0;
+function whisper() {
+  if (!ac || !$('whispOn').checked) return;
+  const t0 = ac.currentTime, len = .25 + Math.random() * .6, out = ac.createGain(); out.__isFx = true;
+  const pan = ac.createStereoPanner(); pan.pan.value = (Math.random() - .5) * 1.8;
+  out.gain.setValueAtTime(.0001, t0); out.gain.exponentialRampToValueAtTime(.06 + Math.random() * .06 + (3 - game.lives) * .03, t0 + len * .3); out.gain.exponentialRampToValueAtTime(.0001, t0 + len);
+  const buf = ac.createBuffer(1, ac.sampleRate * len, ac.sampleRate), d = buf.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  const src = ac.createBufferSource(); src.buffer = buf;
+  const f1 = ac.createBiquadFilter(), f2 = ac.createBiquadFilter(); f1.type = f2.type = 'bandpass'; f1.Q.value = 12; f2.Q.value = 9;
+  f1.frequency.setValueAtTime(300 + Math.random() * 500, t0); f1.frequency.linearRampToValueAtTime(300 + Math.random() * 500, t0 + len);   // gliding formants ≈ vowels
+  f2.frequency.setValueAtTime(1200 + Math.random() * 1600, t0); f2.frequency.linearRampToValueAtTime(1200 + Math.random() * 1600, t0 + len);
+  src.connect(f1).connect(out); src.connect(f2).connect(out); out.connect(pan).connect(ac.destination); src.start(t0); src.stop(t0 + len);
+}
+function stinger() {   // sub drone + noise hiss under the voice, through web audio
+  if (!ac) return; const t0 = ac.currentTime, out = ac.createGain(); out.__isFx = true; out.gain.setValueAtTime(.0001, t0);
+  out.gain.exponentialRampToValueAtTime(.25, t0 + .05); out.gain.exponentialRampToValueAtTime(.0001, t0 + 1.8); out.connect(ac.destination);
+  const o = ac.createOscillator(); o.type = 'sawtooth'; o.frequency.setValueAtTime(48, t0); o.frequency.exponentialRampToValueAtTime(30, t0 + 1.6);
+  const o2 = ac.createOscillator(); o2.type = 'square'; o2.frequency.value = 48.7;
+  const lp = ac.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 400;
+  o.connect(lp); o2.connect(lp); lp.connect(out); o.start(t0); o2.start(t0); o.stop(t0 + 1.9); o2.stop(t0 + 1.9);
+}
+window.speechSynthesis?.getVoices();
+
+/* ---------- mic fx ---------- */
+function shaper(k) { const n = 2048, c = new Float32Array(n), a = k * 100; for (let i = 0; i < n; i++) { const x = i * 2 / n - 1; c[i] = (3 + a) * x * 20 * (Math.PI / 180) / (Math.PI + a * Math.abs(x)); } return c; }
+async function startMic() {
+  ensureAudio(); if (!ac) { status.textContent = 'press Play first'; return; } if (ac.state !== 'running') await ac.resume();
+  const src = ac.createMediaStreamSource(await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, autoGainControl: false } }));
+  const hp = ac.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 120;
+  const ws = ac.createWaveShaper(); ws.curve = shaper(.6); ws.oversample = '2x';
+  const dl = ac.createDelay(2); const fb = ac.createGain(); const lp = ac.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 3000;
+  const out = ac.createGain(); out.gain.value = 0; out.__isFx = true;
+  src.connect(hp).connect(ws).connect(lp); ws.connect(dl); dl.connect(fb).connect(dl); dl.connect(lp);
+  micA = ac.createAnalyser(); micA.fftSize = 1024; micWave = new Float32Array(1024); lp.connect(micA); lp.connect(out); out.connect(ac.destination);
+  fx = { ws, dl, fb, out }; applyFx(); mic.on = true; $('micBtn').textContent = 'Mic on'; $('micBtn').disabled = true;
+}
+function applyFx() { if (!fx) return; fx.ws.curve = shaper(+$('drive').value); fx.dl.delayTime.value = +$('delay').value; fx.fb.gain.value = +$('fb').value; fx.out.gain.value = $('monitor').checked ? .9 : 0; }
+function readAudio() {
+  if (tap) { tap.getByteFrequencyData(freq); const band = (a, b) => { let s = 0; for (let i = a; i < b; i++) s += freq[i]; return s / (b - a) / 255; };
+    audio.bass = lerp(audio.bass, band(1, 8), .5); audio.mid = lerp(audio.mid, band(8, 60), .4); audio.high = lerp(audio.high, band(60, 300), .4); audio.level = (audio.bass + audio.mid + audio.high) / 3; }
+  if (micA) { micA.getFloatTimeDomainData(micWave); let r = 0; for (let i = 0; i < micWave.length; i++) r += micWave[i] * micWave[i]; mic.level = lerp(mic.level, Math.min(1, Math.sqrt(r / micWave.length) * 6), .3); }
+}
+
+/* ---------- game ---------- */
+const arrowEl = $('arrow'), glitchEl = $('glitch'), bg = $('bg');
+let glitch = 0, flash = 0, nameTimer = 0, lookAwayT = 0;
+const TAUNTS = ['{n}.', '{n}… turn.', 'faster, {n}.', 'i see you, {n}.', 'don\'t look away, {n}.', 'again, {n}.', 'you\'re still here, {n}.', 'breathe, {n}.', 'i know your face now, {n}.'];
+const WARN = { '-1': ['left, {n}.', 'go left.', 'left. now.'], '1': ['right, {n}.', 'go right.', 'right. now.'] };
+const CLOSE = ['close, {n}.', 'too close.', 'almost.'];
+const MILESTONES = { 5: 'five, {n}. keep going.', 10: 'ten. you learn quickly, {n}.', 20: 'twenty. it gets faster now.', 35: 'thirty five. {n}, i\'m impressed.', 50: 'fifty. nobody reaches fifty, {n}.', 75: 'seventy five. stop, {n}. please.', 100: 'one hundred. {n}. you can\'t leave now.' };
+let warnedRow = null, lastLane = 0, laneComment = 0, speedSaid = 0;
+const line = (arr) => arr[Math.random() * arr.length | 0].replace('{n}', game.name);
+function resetGame() {
+  blocks.forEach(b => scene.remove(b)); blocks.length = 0; nextSpawnZ = -50;
+  Object.assign(game, { speed: +$('spd').value, score: 0, lives: 3, running: true, over: false, hits: 0 }); warnedRow = null; speedSaid = +$('spd').value; nameTimer = 0;
+  camera.position.x = 0; $('gate').style.display = 'none';
+}
+function endGame() {
+  game.running = false; game.over = true;
+  $('gate').querySelector('h1').textContent = 'YOU STOPPED, ' + game.name.toUpperCase();
+  $('gate').querySelector('p').innerHTML = `${game.score} blocks avoided.<br>it will remember your face.`;
+  $('name').style.display = 'none'; $('enter').textContent = 'again'; $('gate').style.display = 'flex';
+  say(`${game.name}. ${game.name}. you stopped.`, { stutter: true, priority: 2 });
+}
+function updateGame(dt, t) {
+  if (!game.running) return;
+  // pause when not looking
+  if (!head.looking && video.srcObject) {
+    lookAwayT += dt; arrowEl.textContent = '◉'; arrowEl.innerHTML = `◉<small>LOOK AT THE SCREEN${game.name ? ', ' + game.name.toUpperCase() : ''}</small>`; arrowEl.style.opacity = 1;
+    if (lookAwayT > 1.5) { say(`${game.name}. look at me.`, { priority: 1 }); lookAwayT = -4; }
+    return;
+  }
+  lookAwayT = 0;
+  game.speed += dt * .6;
+  const v = game.speed;
+  // camera slides to the lane
+  camera.position.x = lerp(camera.position.x, head.lane * LANE_W, 1 - Math.exp(-dt * 6));
+  camera.rotation.z = lerp(camera.rotation.z, -(head.lane * LANE_W - camera.position.x) * .04, .2);
+  // scroll geometry
+  for (const l of cross) { l.position.z += v * dt; if (l.position.z > 2) l.position.z -= 28 * 4; }
+  for (const l of ribs) { l.position.z += v * dt; if (l.position.z > 2) l.position.z -= 28 * 4; }
+  // spawn: 1 or 2 blocks, always leaving a free lane
+  nextSpawnZ += v * dt;
+  if (nextSpawnZ > -40) {
+    const free = Math.floor(Math.random() * 3) - 1; const two = Math.random() < Math.min(.6, game.score / 30);
+    for (const lane of [-1, 0, 1]) if (lane !== free && (two || Math.random() < .5)) spawnBlock(lane, -DEPTH + 10);
+    if (!blocks.some(b => b.position.z === -DEPTH + 10)) spawnBlock([-1, 0, 1].filter(l => l !== free)[Math.random() < .5 ? 0 : 1], -DEPTH + 10);
+    nextSpawnZ = -50 - Math.max(6, 22 - v * .25);
+  }
+  // move blocks, collide, score
+  for (let i = blocks.length - 1; i >= 0; i--) {
+    const b = blocks[i]; b.position.z += v * dt;
+    b.material.color.copy(colB).lerp(colA, mic.level * .8).offsetHSL(audio.high * .2, 0, audio.bass * .3);
+    if (!b.userData.passed && b.position.z > -1.5) {
+      b.userData.passed = true;
+      if (b.userData.lane === head.lane) { game.hits++; game.lives--; glitch = 1; flash = 1;
+        say(game.lives > 0 ? line(TAUNTS) : `${game.name}.`, { stutter: Math.random() < .5, priority: 2 }); if (game.lives <= 0) endGame(); }
+      else {
+        game.score++;
+        if (Math.abs(b.userData.lane - head.lane) === 1 && b.userData.dodgedLate) say(line(CLOSE), { priority: 1 });
+        if (MILESTONES[game.score]) say(MILESTONES[game.score].replace('{n}', game.name), { priority: 1 });
+      }
+    }
+    if (!b.userData.passed && b.position.z > -12 && b.userData.lane === head.lane) b.userData.dodgedLate = true;   // still in the way at 12 m
+    if (b.position.z > 4) { scene.remove(b); blocks.splice(i, 1); }
+  }
+  // arrow: nearest unpassed block row
+  const upcoming = blocks.filter(b => !b.userData.passed && b.position.z < -1.5).sort((a, b) => b.position.z - a.position.z);
+  if (upcoming.length) {
+    const rowZ = upcoming[0].position.z, row = upcoming.filter(b => Math.abs(b.position.z - rowZ) < 1).map(b => b.userData.lane);
+    const dist = -rowZ;
+    if (row.includes(head.lane)) {
+      const freeLanes = [-1, 0, 1].filter(l => !row.includes(l)); const target = freeLanes.sort((a, b) => Math.abs(a - head.lane) - Math.abs(b - head.lane))[0];
+      const dir = target > head.lane ? 1 : -1;
+      arrowEl.innerHTML = (dir > 0 ? '→' : '←') + `<small>${dist.toFixed(0)} m</small>`; arrowEl.style.opacity = dist < 60 ? 1 : .35;
+      if (dist < 40 && warnedRow !== upcoming[0]) { warnedRow = upcoming[0]; say(line(WARN[dir]), { priority: 1 }); }   // spoken warning per row
+    } else { arrowEl.innerHTML = '·' + `<small>HOLD</small>`; arrowEl.style.opacity = dist < 30 ? .6 : 0; }
+  } else arrowEl.style.opacity = 0;
+  // lane changes: comment now and then
+  if (head.lane !== lastLane) { lastLane = head.lane; if ((laneComment += 1) % 4 === 0) say(line(['good.', 'yes.', 'there, {n}.', 'that way.']), { priority: 0 }); }
+  // speed milestones
+  if (v > speedSaid + 15) { speedSaid = v; say(line(['faster.', 'it\'s getting faster, {n}.', 'can you keep up, {n}?']), { priority: 0 }); }
+  // idle chatter
+  if ((nameTimer += dt) > 14 + Math.random() * 10) { nameTimer = 0; say(line(TAUNTS), { stutter: Math.random() < .3, priority: 0 }); }
+  // speed → tempo
+  if ($('speedTempo').checked && baseCps && window.setcps) setcps(baseCps * (1 + (v - +$('spd').value) / 120));
+}
+
+/* ---------- loop ---------- */
+const clock = new THREE.Clock(); let hudTick = 0, renderTick = 0;
+function resize() { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); effect.setSize(innerWidth, innerHeight); }
+addEventListener('resize', resize); resize();
+function frame() {
+  requestAnimationFrame(frame);
+  const dt = Math.min(clock.getDelta(), .05), t = clock.elapsedTime;
+  track(t); readAudio(); updateGame(dt, t); speechWatchdog();
+  if (game.running && (whispTimer += dt) > (3.5 - +$('whispDen').value * 3) + Math.random() * 2) { whispTimer = 0; whisper(); if (Math.random() < .25 + (3 - game.lives) * .15) setTimeout(whisper, 120 + Math.random() * 200); }
+  glitch *= Math.exp(-dt * 5); flash *= Math.exp(-dt * 6);
+  // ambient sound → colours: mic shifts hue, music bands brighten
+  const hue = (t * .01 + mic.level * .35 + audio.mid * .1) % 1;
+  lineMat.color.setHSL((.52 + hue) % 1, 1, .5 + audio.bass * .3);
+  wallMat.color.setHSL((.78 + hue) % 1, 1, .45 + audio.high * .3);
+  effect.domElement.style.filter = glitch > .05 ? `contrast(${1 + glitch * 2}) hue-rotate(${glitch * 120}deg)` : '';
+  effect.domElement.style.transform = glitch > .05 ? `translateX(${(Math.random() - .5) * glitch * 40}px)` : '';
+  glitchEl.style.opacity = flash * .6;
+  scene.fog.density = .028 - Math.min(.012, game.speed * .0002);
+  // in mono mode the whole picture takes one colour: hue from the mic, brightness from the bass
+  if (!effect.__color) effect.domElement.style.color = `hsl(${((hue + .52) % 1 * 360) | 0} 100% ${(55 + audio.bass * 30) | 0}%)`;
+  if ((renderTick += dt) >= 1 / 30) { renderTick = 0; effect.render(scene, camera); }
+  if (hudTick + dt > .1) bg.style.background = `radial-gradient(circle at 50% 60%, hsl(${(hue * 360 + 190) | 0} 90% ${(15 + audio.bass * 30) | 0}%) 0, #000 70%)`;
+  if ((hudTick += dt) > .1) { hudTick = 0;
+    $('hudL').innerHTML = `${game.name ? game.name.toUpperCase() : 'GUEST'}\nscore <b>${game.score}</b>\nlives <b>${'▮'.repeat(Math.max(0, game.lives))}${'▯'.repeat(3 - Math.max(0, game.lives))}</b>\nspeed <b>${game.speed.toFixed(0)}</b>`;
+    $('hudR').innerHTML = `face  <b>${head.present ? (head.looking ? 'looking' : 'AWAY') : 'none'}</b>\nyaw   <b>${head.yaw.toFixed(2)}</b>\nlane  <b>${['L', 'C', 'R'][head.lane + 1]}</b>\nmic   <b>${mic.level.toFixed(2)}</b>\nbass  <b>${audio.bass.toFixed(2)}</b>\ntts   <b>${!window.speechSynthesis ? 'n/a' : speechSynthesis.speaking ? 'speaking' : speechSynthesis.pending ? 'pending' : speechSynthesis.paused ? 'PAUSED' : 'idle'}${sayQueue.length ? ' +' + sayQueue.length : ''}</b>`; }
+}
+frame();
+
+/* ---------- strudel + controls ---------- */
+const ds = 'https://raw.githubusercontent.com/felixroos/dough-samples/main';
+const replReady = initStrudel({
+  sync: WORKER_OK,              // SharedWorker clock: ticks survive main-thread jank (needs same-origin strudel)
+  prebake: () => Promise.all([samples(`${ds}/tidal-drum-machines.json`), samples(`${ds}/Dirt-Samples.json`), samples('github:eddyflux/crate'), samples('github:eddyflux/wax'), samples('github:yaxu/clean-breaks')]),
+});
+replReady.then(repl => { if (WORKER_OK && repl?.scheduler) repl.scheduler.latency = .35; });   // 350 ms of scheduling headroom
+status.textContent = WORKER_OK ? 'ready — worker clock' : LOCAL_STRUDEL ? 'ready — local build, no /assets/ worker (run "npm install" again to copy it)' : 'ready — CDN build (run "npm install" here for glitch-free audio)';
+trackSel.onchange = e => load(+e.target.value, game.running); $('prev').onclick = () => load(cur - 1, game.running); $('next').onclick = () => load(cur + 1, game.running);
+['thr', 'spd', 'drive', 'delay', 'fb', 'npitch', 'whispDen', 'nvol'].forEach(id => $(id).addEventListener('input', e => { $(id + 'V').textContent = e.target.value; applyFx(); }));
+$('monitor').addEventListener('change', applyFx);
+$('narrTest').onclick = () => { ensureAudio(); say(`testing. ${game.name || 'stranger'}. i can see you.`, { stutter: true, priority: 2 }); whisper(); };
+$('narrReset').onclick = resetNarration;
+$('camBtn').onclick = () => startCamera().catch(err => { status.textContent = 'camera: ' + err.message; $('camBtn').disabled = false; });
+$('micBtn').onclick = () => startMic().catch(err => status.textContent = 'mic: ' + err.message);
+$('fold').onclick = e => { $('panel').classList.toggle('folded'); e.target.textContent = $('panel').classList.contains('folded') ? 'Show code' : 'Hide code'; };
+async function playTrack() {
+  const a = getAudioContext(); if (a.state !== 'running') await a.resume(); ensureAudio();
+  await evaluate(adapt(codeEl.value));
+  const m = codeEl.value.match(/setcpm\(([^)]+)\)/) || codeEl.value.match(/setcps\(([^)]+)\)/);
+  try { baseCps = m ? (codeEl.value.includes('setcpm') ? eval(m[1]) / 60 : eval(m[1])) : .5; } catch (_) { baseCps = .5; }
+  status.textContent = 'playing: ' + playlist[cur].title;
+}
+$('play').onclick = () => playTrack().catch(err => status.textContent = 'pattern error: ' + err.message);
+$('stop').onclick = () => { try { hush(); } catch (_) {} resetNarration(); status.textContent = 'stopped'; };
+$('restart').onclick = () => { if (game.name) { resetGame(); say(`again, ${game.name}.`, { priority: 2 }); } };
+codeEl.addEventListener('keydown', e => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') $('play').click(); });
+
+// the gate: name → start (also unlocks audio, camera, music)
+async function enter() {
+  const n = $('name').value.trim(); if (!game.over && !n) { $('name').focus(); return; }
+  if (n) game.name = n;
+  try { if (!video.srcObject) await startCamera(); } catch (err) { status.textContent = 'camera: ' + err.message; }
+  try { await playTrack(); } catch (err) { status.textContent = 'pattern error: ' + err.message; }
+  resetGame();
+  say(game.over ? `welcome back, ${game.name}.` : `hello, ${game.name}. don't look away.`, { stutter: true, priority: 2 });
+}
+$('enter').onclick = enter; $('name').addEventListener('keydown', e => { if (e.key === 'Enter') enter(); });
+</script>
+</body>
+</html>
