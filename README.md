@@ -4,7 +4,7 @@ Five browser experiments that connect **[Strudel](https://strudel.cc)** — the 
 
 Each demo builds on the previous one. No build step: every demo is a single HTML file.
 
-**Live:** `{{VERCEL_URL}}`
+**Live:** <https://strudel-visuals.vercel.app>
 
 ## The demos
 
@@ -44,7 +44,7 @@ npm install      # copies @strudel/web into vendor/ and assets/ for demo 5's wor
 npx serve .
 ```
 
-Then open `http://localhost:3000/strudel-tron-head.html` (or any of the five). Demos 1–4 also work by opening the file directly; camera and microphone need `localhost` or HTTPS.
+Then open `http://localhost:3000/` for the index, or a demo file directly. Demos 1–4 also work by opening the file directly; camera and microphone need `localhost` or HTTPS.
 
 ## Deploy
 
