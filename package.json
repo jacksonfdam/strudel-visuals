@@ -1,0 +1,11 @@
+{
+  "name": "strudel-visuals",
+  "private": true,
+  "description": "Strudel × computer vision × three.js — five browser demos",
+  "scripts": {
+    "vendor": "node -e \"const f=require('fs');f.mkdirSync('vendor/strudel-web',{recursive:true});f.copyFileSync('node_modules/@strudel/web/dist/index.js','vendor/strudel-web/index.js');f.cpSync('node_modules/@strudel/web/dist/assets','assets',{recursive:true})\"",
+    "postinstall": "npm run vendor",
+    "start": "npx serve ."
+  },
+  "dependencies": { "@strudel/web": "1.3.0" }
+}
