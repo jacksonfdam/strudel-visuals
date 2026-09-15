@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>strudel visuals</title>
+<meta name="robots" content="noindex">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>◉</text></svg>">
+<link rel="stylesheet" href="site.css">
+</head>
+<body class="demo">
+
+<button class="peek" type="button" id="peek">▾ nav</button>
+<div class="stage" id="stage"></div>
+
+<script src="demos.js"></script>
+<script src="site.js"></script>
+<script>
+// The demo id travels in the hash: a static host that rewrites or redirects
+// the path can drop a query string, but never the fragment.
+function currentDemo() {
+  var id = location.hash.replace(/^#/, '') ||
+           new URLSearchParams(location.search).get('d');
+  return demoById(id) || DEMOS[0];
+}
+
+var stage = document.getElementById('stage');
+var nav = null;
+var shown = null;
+
+function markActive(id) {
+  var links = nav.querySelectorAll('.nav-link');
+  for (var i = 0; i < links.length; i++) {
+    if (links[i].getAttribute('href') === 'demo.html#' + id) {
+      links[i].setAttribute('aria-current', 'page');
+    } else {
+      links[i].removeAttribute('aria-current');
+    }
+  }
+}
+
+function render() {
+  var demo = currentDemo();
+  if (demo.id === shown) return;
+  shown = demo.id;
+
+  document.title = demo.title + ' — strudel visuals';
+  markActive(demo.id);
+  stage.innerHTML = '';
+
+  demoExists(demo).then(function (ok) {
+    if (demo.id !== shown) return; // navigated away while probing
+    if (!ok) return showMissing(demo);
+
+    var frame = document.createElement('iframe');
+    frame.src = demo.file;
+    frame.title = demo.title;
+    frame.allow = 'camera; microphone; autoplay; fullscreen; xr-spatial-tracking';
+    stage.appendChild(frame);
+  });
+}
+
+function showMissing(demo) {
+  var box = document.createElement('div');
+  box.className = 'missing';
+  box.innerHTML =
+    '<div class="missing-box">' +
+      '<h2>' + demo.title + ' isn\'t deployed yet</h2>' +
+      '<p>The file <code>' + demo.file + '</code> is not in this deployment. ' +
+        'The demo is live on CodePen in the meantime.</p>' +
+      '<p><a href="' + demo.pen + '" target="_blank" rel="noopener">open on CodePen →</a></p>' +
+    '</div>';
+  stage.appendChild(box);
+}
+
+nav = buildNav(currentDemo().id);
+
+document.getElementById('peek').addEventListener('click', function () {
+  document.body.classList.remove('nav-hidden');
+});
+
+document.addEventListener('keydown', function (e) {
+  // Escape brings the nav back when a demo has swallowed the pointer.
+  if (e.key === 'Escape') document.body.classList.remove('nav-hidden');
+});
+
+window.addEventListener('hashchange', render);
+render();
+</script>
+</body>
+</html>

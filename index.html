@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>strudel visuals — strudel × computer vision × three.js</title>
+<meta name="description" content="Five browser experiments connecting Strudel live-coded music to real-time visuals: ascii sync, hand tracking, audio-reactive point clouds, an ascii webcam and a head-steered corridor game.">
+<meta property="og:title" content="strudel visuals">
+<meta property="og:description" content="Five browser experiments connecting Strudel live-coded music to real-time visuals and to the body.">
+<meta property="og:type" content="website">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>◉</text></svg>">
+<link rel="stylesheet" href="site.css">
+</head>
+<body>
+
+<main class="wrap">
+  <header class="hero">
+    <h1>strudel <span class="x">×</span> computer vision <span class="x">×</span> three.js</h1>
+    <p>
+      Five browser experiments that connect <strong><a href="https://strudel.cc" target="_blank" rel="noopener">Strudel</a></strong> —
+      the JavaScript port of TidalCycles, a live-coding music language — to real-time visuals and, eventually, to the body:
+      audio-reactive ASCII graphics, hand tracking, body point clouds, a webcam-to-ASCII renderer with a distorted
+      microphone chain, and a first-person corridor game you steer with your head while a distorted narrator says your name.
+    </p>
+    <p>
+      Each demo builds on the previous one. No build step: every demo is a single HTML file.
+      Pick one from the bar at the top — it takes over the whole page.
+    </p>
+    <div class="notice">
+      <b>Heads up.</b> Demos 2–5 ask for the camera, and 4 and 5 ask for the microphone.
+      Nothing leaves your machine — the tracking and the analysis both run in the tab.
+      Use headphones for 4 and 5 unless you want feedback.
+    </div>
+  </header>
+
+  <h2 class="section-label">The demos</h2>
+  <div class="cards" id="cards"></div>
+
+  <footer class="foot">
+    <p>
+      Code by <strong>Jackson F. de A. Mafra</strong> ·
+      <a href="https://github.com/jacksonfdam" target="_blank" rel="noopener">@jacksonfdam</a> ·
+      MIT. Strudel is by Alex McLean and Felix Roos and is AGPL-3.0 —
+      see <a href="https://github.com/jacksonfdam/strudel-visuals/blob/main/THIRD_PARTY.md" target="_blank" rel="noopener">THIRD_PARTY.md</a>
+      for every dependency, sample pack and Bakery pattern author.
+    </p>
+    <p>Fork it, break it, test it. Just please include credits and share your own experiment.</p>
+  </footer>
+</main>
+
+<script src="demos.js"></script>
+<script src="site.js"></script>
+<script>
+buildNav(null);
+
+var cards = document.getElementById('cards');
+
+DEMOS.forEach(function (d) {
+  var card = document.createElement('a');
+  card.className = 'card';
+  card.href = 'demo.html#' + d.id;
+
+  var needs = d.needs.map(function (n) {
+    return '<span class="pill">' + n + '</span>';
+  }).join('');
+
+  card.innerHTML =
+    '<div class="card-head">' +
+      '<span class="card-n">' + d.n + '</span>' +
+      '<span class="card-title">' + d.title + '</span>' +
+      '<span class="card-tag">· ' + d.tagline + '</span>' +
+    '</div>' +
+    '<p>' + d.blurb + '</p>' +
+    '<div class="card-meta">' +
+      '<span class="pill live" data-status>open</span>' +
+      needs +
+    '</div>';
+
+  cards.appendChild(card);
+
+  demoExists(d).then(function (ok) {
+    if (ok) return;
+    card.classList.add('is-soon');
+    var pill = card.querySelector('[data-status]');
+    pill.className = 'pill soon';
+    pill.textContent = 'not deployed yet';
+  });
+});
+</script>
+</body>
+</html>
