@@ -1,0 +1,435 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>strudel × three.js — ascii sync</title>
+<style>
+  :root{
+    --ink:#04070a; --glyph:#9ff4ee; --hot:#ff7a1a; --dim:#2a4e4f; --rain:#9ff4ee;
+    --glitch-a:#ff2bd6; --glitch-b:#22e5ff;
+  }
+  html,body{margin:0;height:100%;background:var(--ink);color:var(--glyph);
+    font:13px/1.45 "IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;overflow:hidden}
+
+  /* layers, back to front */
+  #stage{position:fixed;inset:0;z-index:1}
+  #stage table{filter:drop-shadow(0 0 6px color-mix(in srgb,var(--glyph) 40%,transparent));will-change:transform}
+  #fx{position:fixed;inset:0;z-index:2;pointer-events:none;mix-blend-mode:screen}
+  #crt{position:fixed;inset:0;z-index:3;pointer-events:none;
+    background:
+      repeating-linear-gradient(0deg,rgba(0,0,0,.22) 0 1px,transparent 1px 3px),
+      radial-gradient(ellipse at center,transparent 55%,rgba(0,0,0,.75) 100%)}
+  #crt::after{content:"";position:absolute;inset:0;background:linear-gradient(transparent 0,rgba(255,255,255,.035) 50%,transparent 100%);
+    height:12%;animation:sweep 7s linear infinite}
+  @keyframes sweep{from{transform:translateY(-15vh)}to{transform:translateY(110vh)}}
+
+  .hud{position:fixed;z-index:4;pointer-events:none;color:var(--hot);white-space:pre;opacity:.9}
+  .hud.tl{top:18px;left:20px}
+  .hud.tr{top:18px;right:20px;text-align:right}
+  .hud b{font-weight:400;color:var(--glyph)}
+
+  /* hacker terminal */
+  #term{position:fixed;z-index:4;left:20px;bottom:18px;width:min(460px,calc(100vw - 40px));height:230px;
+    margin:0;overflow:hidden;color:var(--glyph);pointer-events:none;
+    display:flex;flex-direction:column;justify-content:flex-end;
+    -webkit-mask-image:linear-gradient(transparent,#000 35%);mask-image:linear-gradient(transparent,#000 35%)}
+  #term .l{white-space:pre;opacity:.85}
+  #term .l.sys{color:var(--dim)}
+  #term .l.hit{color:var(--hot)}
+  #term .cur::after{content:"█";animation:blink 1s steps(1) infinite;color:var(--hot)}
+  @keyframes blink{50%{opacity:0}}
+
+  /* control panel */
+  #panel{position:fixed;z-index:5;right:20px;bottom:18px;width:min(520px,calc(100vw - 40px));
+    background:color-mix(in srgb,var(--ink) 85%,transparent);border:1px solid var(--dim);padding:10px 12px}
+  #panel textarea{width:100%;box-sizing:border-box;height:170px;resize:vertical;
+    background:transparent;color:var(--glyph);border:0;outline:none;font:inherit;line-height:1.5}
+  #panel .row{display:flex;gap:10px;align-items:center;margin-top:8px;flex-wrap:wrap}
+  button{font:inherit;background:transparent;color:var(--hot);border:1px solid var(--hot);padding:4px 12px;cursor:pointer}
+  button:hover,button:focus-visible{background:var(--hot);color:var(--ink);outline:none}
+  button.quiet{color:var(--dim);border-color:var(--dim)}
+  #status{color:var(--dim);margin-left:auto}
+  label{display:flex;align-items:center;gap:6px;color:var(--dim);cursor:pointer}
+  label.slide{flex:1}
+  label b{font-weight:400;color:var(--hot);min-width:3.5ch;text-align:right}
+  input[type=range]{flex:1;accent-color:var(--hot);height:2px;margin:0}
+  input[type=checkbox]{accent-color:var(--hot);margin:0}
+  select{font:inherit;background:var(--ink);color:var(--glyph);border:1px solid var(--dim);padding:2px 6px}
+  #panel.folded textarea,#panel.folded .row.fx{display:none}
+  @media (prefers-reduced-motion:reduce){#stage table{filter:none} #crt::after{animation:none}}
+</style>
+</head>
+<body>
+<div id="stage"></div>
+<canvas id="fx"></canvas>
+<div id="crt"></div>
+
+<div class="hud tl" id="hudL"></div>
+<div class="hud tr" id="hudR">energy <b>0.00</b>
+cycle  <b>0.00</b></div>
+<pre id="term"></pre>
+
+<div id="panel">
+  <textarea id="code" spellcheck="false">// vis("name") tags a voice: kick snare hat clap bass perc break
+stack(
+  s("bd*2 [~ bd] bd ~").bank("crate").onTrigger(vis("kick"), false),
+  s("~ rim:1 ~ [rim:2 ~ rim:1]").bank("crate").room(.25).onTrigger(vis("snare"), false),
+  s("hh*8").gain("[.5 .9]*4").hpf(600).sometimes(x => x.speed(-1)).onTrigger(vis("hat"), false),
+  s("~ ~ ~ cp").room(.4).gain(.8).onTrigger(vis("clap"), false),
+  s("bass:2*4").n("<0 0 3 5>").lpf(500).gain(.9).onTrigger(vis("bass"), false),
+  s("perc:<1 3 4>*4").mask("[0 1]*2").hpf(1000).dec(.1).onTrigger(vis("perc"), false),
+  s("loop4/4").fit().chop(32).dec(.15).hpf(400).postgain(.5).mask("<0!4 1!4>").onTrigger(vis("break"), false),
+)</textarea>
+  <div class="row">
+    <label class="slide">tempo <input id="bpm" type="range" min="60" max="180" step="1" value="132"> <b id="bpmV">132</b> bpm</label>
+    <label class="slide">motion <input id="motion" type="range" min="0" max="3" step="0.05" value="1"> <b id="motionV">1.00</b>×</label>
+  </div>
+  <div class="row fx">
+    <label><input type="checkbox" id="fxRain" checked> rain</label>
+    <label><input type="checkbox" id="fxGlitch" checked> glitch</label>
+    <label><input type="checkbox" id="fxCrt" checked> crt</label>
+    <label><input type="checkbox" id="fxTerm" checked> terminal</label>
+    <label>palette <select id="palette">
+      <option value="phosphor">phosphor</option>
+      <option value="matrix">matrix</option>
+      <option value="cyber">cyberpunk</option>
+      <option value="amber">amber</option>
+      <option value="td">touchdesigner</option>
+    </select></label>
+  </div>
+  <div class="row">
+    <button id="play">Play</button>
+    <button id="stop" class="quiet">Stop</button>
+    <button id="fold" class="quiet">Hide code</button>
+    <span id="status">loading samples…</span>
+  </div>
+</div>
+
+<script src="https://unpkg.com/@strudel/web@1.1.0"></script>
+<script type="importmap">
+{ "imports": {
+  "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+}}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { AsciiEffect } from 'three/addons/effects/AsciiEffect.js';
+
+const $ = id => document.getElementById(id);
+const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+/* ---------- palettes ---------- */
+const PALETTES = {
+  phosphor: { ink:'#04070a', glyph:'#9ff4ee', hot:'#ff7a1a', dim:'#2a4e4f', rain:'#9ff4ee', ga:'#ff2bd6', gb:'#22e5ff' },
+  matrix:   { ink:'#000000', glyph:'#39ff6a', hot:'#c8ffd8', dim:'#0f4a22', rain:'#39ff6a', ga:'#00ff41', gb:'#0a5', },
+  cyber:    { ink:'#0a0414', glyph:'#00f0ff', hot:'#ff2bd6', dim:'#3d1f66', rain:'#ff2bd6', ga:'#ff2bd6', gb:'#00f0ff' },
+  amber:    { ink:'#0b0700', glyph:'#ffb000', hot:'#fff0c0', dim:'#5a3d00', rain:'#ffb000', ga:'#ff5500', gb:'#ffe08a' },
+  td:       { ink:'#050505', glyph:'#e8e8e8', hot:'#ff3c00', dim:'#3a3a3a', rain:'#6f6f6f', ga:'#ff3c00', gb:'#00c8ff' },
+};
+let pal = PALETTES.phosphor;
+function setPalette(name) {
+  pal = PALETTES[name];
+  const r = document.documentElement.style;
+  r.setProperty('--ink', pal.ink); r.setProperty('--glyph', pal.glyph); r.setProperty('--hot', pal.hot);
+  r.setProperty('--dim', pal.dim); r.setProperty('--rain', pal.rain);
+  r.setProperty('--glitch-a', pal.ga); r.setProperty('--glitch-b', pal.gb);
+  effect.domElement.style.color = pal.glyph;
+  effect.domElement.style.backgroundColor = pal.ink;
+  log(`palette → ${name}`, 'sys');
+}
+
+/* ---------- 1. strudel → visual queue ---------- */
+const queue = [];
+// @strudel/web 1.1.0 calls onTrigger(targetTime, hap, currentTime, cps, t);
+// the REPL docs describe (hap, deadline, duration, cps, t). Resolve by type.
+window.vis = (name) => {
+  // inside evaluate(), "kick" is transpiled into a mini-notation Pattern → unwrap it
+  if (typeof name !== 'string') {
+    try { name = String(name.queryArc(0, 1)[0].value); } catch (_) { name = String(name); }
+  }
+  return (...args) => {
+    const hap = args.find(a => a && typeof a === 'object' && a.whole);
+    if (!hap) return;
+    const t = typeof args[0] === 'number' ? args[0] : args[args.length - 1];
+    queue.push({ t, name, v: hap.value, cycle: hap.whole.begin.valueOf() });
+  };
+};
+
+/* ---------- 2. three.js scene ---------- */
+const renderer = new THREE.WebGLRenderer({ antialias: false });
+const effect = new AsciiEffect(renderer, ' .:-=+*#%@', { invert: true, resolution: 0.19 });
+$('stage').appendChild(effect.domElement);
+
+const scene = new THREE.Scene();
+scene.fog = new THREE.Fog(0x000000, 6, 60);
+const camera = new THREE.PerspectiveCamera(62, 1, .1, 200);
+camera.position.z = 9;
+scene.add(new THREE.AmbientLight(0xffffff, .25));
+const lamp = new THREE.PointLight(0xffffff, 60, 40);
+lamp.position.set(0, 3, 8); scene.add(lamp);
+
+// tunnel of square frames
+const tunnel = new THREE.Group();
+const frameMat = new THREE.MeshBasicMaterial({ color: 0x446666 });
+for (let i = 0; i < 26; i++) {
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(7, .06, 4, 4), frameMat);
+  ring.rotation.z = Math.PI / 4; ring.position.z = -i * 3.5; tunnel.add(ring);
+}
+scene.add(tunnel);
+
+// core — noise-displaced blob (TouchDesigner "Noise SOP" feel)
+const coreGeo = new THREE.IcosahedronGeometry(1.7, 3);
+const coreBase = coreGeo.attributes.position.array.slice();
+const core = new THREE.Mesh(coreGeo, new THREE.MeshPhongMaterial({ color: 0xffffff, flatShading: true, shininess: 10 }));
+scene.add(core);
+function noise3(x, y, z, t) {
+  return Math.sin(x * 2.1 + t) * Math.sin(y * 2.4 + t * 1.3) * Math.sin(z * 1.7 - t * .8);
+}
+
+// ground — point-cloud wave surface with kick ripples
+const gGeo = new THREE.PlaneGeometry(34, 22, 68, 44);
+const gBase = gGeo.attributes.position.array.slice();
+const ground = new THREE.Points(gGeo, new THREE.PointsMaterial({ color: 0x9fbfbf, size: .13 }));
+ground.rotation.x = -Math.PI / 2; ground.position.y = -4.2; ground.position.z = -6;
+scene.add(ground);
+const ripples = [];
+
+// satellites (hats) + debris (snare)
+const sats = [];
+for (let i = 0; i < 8; i++) {
+  const m = new THREE.Mesh(new THREE.BoxGeometry(.45, .45, .45), new THREE.MeshPhongMaterial({ color: 0xffffff, flatShading: true }));
+  m.userData = { a: (i / 8) * Math.PI * 2, r: 4.2, flash: 0 }; scene.add(m); sats.push(m);
+}
+const debris = [];
+for (let i = 0; i < 40; i++) {
+  const m = new THREE.Mesh(new THREE.TetrahedronGeometry(.28), new THREE.MeshPhongMaterial({ color: 0xffffff, flatShading: true }));
+  m.visible = false; m.userData = { v: new THREE.Vector3(), life: 0 }; scene.add(m); debris.push(m);
+}
+
+/* ---------- 3. 2D fx layer: matrix rain + feedback trails ---------- */
+const fx = $('fx'), fctx = fx.getContext('2d');
+const RAIN_CHARS = 'ｦｧｨｩｪｫｬｭｮｯｰｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜﾝ0123456789<>/\\=+*#';
+let cols = [], cell = 16;
+function resetRain() {
+  cell = innerWidth < 700 ? 13 : 16;
+  const n = Math.ceil(fx.width / cell);
+  cols = Array.from({ length: n }, () => ({ y: Math.random() * -fx.height, v: 0, on: false, hot: 0 }));
+}
+function drawRain(dt) {
+  // trail: fade the previous frame instead of clearing → feedback look
+  fctx.globalCompositeOperation = 'destination-out';
+  fctx.fillStyle = `rgba(0,0,0,${0.10 + state.energy * .08})`;
+  fctx.fillRect(0, 0, fx.width, fx.height);
+  fctx.globalCompositeOperation = 'source-over';
+  if (!$('fxRain').checked || reduced) return;
+  fctx.font = `${cell - 2}px ui-monospace, Menlo, monospace`;
+  const density = .003 + state.energy * .02;
+  for (let i = 0; i < cols.length; i++) {
+    const c = cols[i];
+    if (!c.on && Math.random() < density) { c.on = true; c.y = -cell; c.v = (4 + Math.random() * 8) * state.motion; }
+    if (!c.on) continue;
+    c.y += c.v * dt * 60 * .35;
+    const ch = RAIN_CHARS[(Math.random() * RAIN_CHARS.length) | 0];
+    fctx.fillStyle = c.hot > 0 ? pal.hot : pal.rain;
+    fctx.globalAlpha = c.hot > 0 ? 1 : .75;
+    fctx.fillText(ch, i * cell, c.y);
+    c.hot = Math.max(0, c.hot - dt * 4);
+    if (c.y > fx.height + cell) c.on = false;
+  }
+  fctx.globalAlpha = 1;
+}
+function kickBand() {  // horizontal data-burst on kick
+  const y = Math.random() * fx.height;
+  fctx.fillStyle = pal.hot; fctx.globalAlpha = .35;
+  fctx.fillRect(0, y, fx.width, 2 + Math.random() * 6);
+  fctx.globalAlpha = 1;
+}
+
+/* ---------- 4. terminal ---------- */
+const term = $('term'); let lines = 0;
+const SYS = ['sync drift +0.31ms', 'buffer 512 ok', 'sched lookahead 16.7ms', 'gc pause 2ms', 'osc: no clients', 'clock: audiocontext', 'phase locked'];
+function log(text, cls = '') {
+  if (!$('fxTerm').checked) return;
+  const prev = term.querySelector('.cur'); if (prev) prev.classList.remove('cur');
+  const el = document.createElement('div');
+  el.className = `l ${cls} cur`; el.textContent = text;
+  term.appendChild(el);
+  if (++lines > 18) term.removeChild(term.firstChild);
+}
+const fmt = (c) => { const s = c * (60 / +$('bpm').value) * 4; return `${Math.floor(s / 60)}:${(s % 60).toFixed(2).padStart(5, '0')}`; };
+
+/* ---------- 5. reactions ---------- */
+const state = { kick: 0, energy: 0, spin: 0, bass: 0, shake: 0, glitch: 0, motion: 1,
+  counts: { kick: 0, snare: 0, hat: 0, clap: 0, bass: 0, perc: 0, break: 0 }, cycle: 0 };
+let satIdx = 0, sysTimer = 0;
+
+const REACT = {
+  kick:  e => { state.kick = 1; tunnel.position.z += 3.5; ripples.push({ t: 0 }); kickBand(); return 'core.pulse ground.ripple'; },
+  snare: e => { for (let k = 0; k < 14; k++) { const d = debris.find(x => !x.visible); if (!d) break;
+      d.visible = true; d.position.set(0, 0, 0); d.userData.life = 1;
+      d.userData.v.set(Math.random() - .5, Math.random() - .5, Math.random() * .3).normalize().multiplyScalar(6 + Math.random() * 6); }
+    state.glitch = Math.max(state.glitch, .6); return 'debris.burst glitch'; },
+  hat:   e => { const g = typeof e.v?.gain === 'number' ? e.v.gain : .8;
+    sats[satIdx++ % sats.length].userData.flash = g; state.spin += .35 * g;
+    const c = cols[(Math.random() * cols.length) | 0]; if (c) { c.on = true; c.y = -cell; c.v = 10 * state.motion; c.hot = 1; }
+    return 'sat.flash rain.col'; },
+  clap:  e => { sats.forEach(m => m.userData.flash = 1); state.spin -= .5; return 'sats.all'; },
+  bass:  e => { state.bass = 1; return 'blob.noise cam.push'; },
+  perc:  e => { const ring = tunnel.children[(Math.random() * 6) | 0]; ring.rotation.z += Math.PI / 4 * (Math.random() < .5 ? 1 : -1); return 'tunnel.twist'; },
+  break: e => { state.shake = .35; state.glitch = 1; return 'cam.shake glitch.max'; },
+};
+function fire(e) {
+  state.energy = Math.min(1, state.energy + .25);
+  state.counts[e.name] = (state.counts[e.name] || 0) + 1;
+  state.cycle = e.cycle;
+  const what = REACT[e.name]?.(e) ?? '—';
+  const src = e.v?.s ? `${e.v.s}${e.v.n != null ? ':' + e.v.n : ''}` : '';
+  log(`${fmt(e.cycle)}  ${e.name.padEnd(6)} ${src.padEnd(9)} » ${what}`, 'hit');
+}
+
+/* ---------- 6. glitch on the ascii table ---------- */
+const table = effect.domElement;
+function applyGlitch() {
+  if (!$('fxGlitch').checked || reduced || state.glitch < .02) {
+    table.style.transform = ''; table.style.textShadow = ''; return;
+  }
+  const g = state.glitch;
+  const dx = (Math.random() - .5) * 40 * g, sk = (Math.random() - .5) * 2 * g;
+  table.style.transform = `translateX(${dx}px) skewX(${sk}deg)`;
+  table.style.textShadow = `${-6 * g}px 0 ${pal.ga}, ${6 * g}px 0 ${pal.gb}`;
+  if (g > .3) {  // corrupt a slice of characters (charset has no letters → safe to regex)
+    const td = table.querySelector('td'); if (!td) return;
+    const rows = td.innerHTML.split('<br/>');
+    const from = (Math.random() * rows.length) | 0, len = 1 + ((Math.random() * 4 * g) | 0);
+    for (let r = from; r < Math.min(rows.length, from + len); r++)
+      rows[r] = rows[r].replace(/[.:\-=+*#%@]/g, ch => Math.random() < g * .5 ? '█▓▒░'[(Math.random() * 4) | 0] : ch);
+    td.innerHTML = rows.join('<br/>');
+  }
+}
+
+/* ---------- 7. loop ---------- */
+const hudL = $('hudL'), hudR = $('hudR');
+const clock = new THREE.Clock(); let hudTick = 0;
+function resize() {
+  const w = innerWidth, h = innerHeight;
+  camera.aspect = w / h; camera.updateProjectionMatrix();
+  renderer.setSize(w, h); effect.setSize(w, h);
+  fx.width = w; fx.height = h; resetRain();
+}
+addEventListener('resize', resize); resize();
+
+function frame() {
+  requestAnimationFrame(frame);
+  const dt = Math.min(clock.getDelta(), .05), t = clock.elapsedTime;
+  const now = window.getAudioContext ? getAudioContext().currentTime : 0;
+
+  for (let i = queue.length - 1; i >= 0; i--) if (queue[i].t <= now + 1 / 60) { fire(queue[i]); queue.splice(i, 1); }
+
+  // envelopes
+  state.kick *= Math.exp(-dt * 9); state.energy *= Math.exp(-dt * 2.2); state.spin *= Math.exp(-dt * 3);
+  state.bass *= Math.exp(-dt * 4); state.shake *= Math.exp(-dt * 10); state.glitch *= Math.exp(-dt * 6);
+  const mo = state.motion;
+
+  // tunnel
+  tunnel.position.z += dt * mo * (1.2 + state.energy * 4);
+  if (tunnel.position.z > 3.5) tunnel.position.z -= 3.5;
+  tunnel.rotation.z += dt * mo * .05;
+  frameMat.color.setScalar(.27 + state.bass * .6);
+
+  // core: noise displacement
+  const p = coreGeo.attributes.position.array, amp = .12 + state.bass * .6 + state.energy * .15, sc = 1 + state.kick * .5;
+  for (let i = 0; i < p.length; i += 3) {
+    const x = coreBase[i], y = coreBase[i + 1], z = coreBase[i + 2];
+    const k = sc * (1 + amp * noise3(x, y, z, t * mo * 1.5));
+    p[i] = x * k; p[i + 1] = y * k; p[i + 2] = z * k;
+  }
+  coreGeo.attributes.position.needsUpdate = true; coreGeo.computeVertexNormals();
+  core.rotation.x += dt * mo * .4; core.rotation.y += dt * mo * (.6 + state.spin);
+  lamp.intensity = 40 + state.kick * 160;
+
+  // ground waves + ripples
+  for (let i = ripples.length - 1; i >= 0; i--) { ripples[i].t += dt * 2.2; if (ripples[i].t > 3) ripples.splice(i, 1); }
+  const gp = gGeo.attributes.position.array;
+  for (let i = 0; i < gp.length; i += 3) {
+    const x = gBase[i], y = gBase[i + 1];
+    let z = Math.sin(x * .55 + t * mo) * .35 + Math.sin(y * .8 - t * mo * 1.4) * .3;
+    const d = Math.hypot(x, y + 2);
+    for (const r of ripples) z += Math.sin(d * 2.5 - r.t * 9) * Math.exp(-Math.abs(d - r.t * 4) * .6) * (1.4 - r.t * .4);
+    gp[i + 2] = z * (1 + state.energy);
+  }
+  gGeo.attributes.position.needsUpdate = true;
+
+  // satellites + debris
+  sats.forEach(m => { const u = m.userData; u.a += dt * mo * (.5 + state.spin); u.flash *= Math.exp(-dt * 8);
+    m.position.set(Math.cos(u.a) * u.r, Math.sin(u.a * .7) * 1.4, Math.sin(u.a) * u.r * .6); m.scale.setScalar(1 + u.flash * 2.2); });
+  debris.forEach(m => { if (!m.visible) return; const u = m.userData; u.life -= dt * 1.6;
+    if (u.life <= 0) { m.visible = false; return; }
+    m.position.addScaledVector(u.v, dt); u.v.multiplyScalar(1 - dt * 1.5); m.rotation.x += dt * 6; m.rotation.z += dt * 4; m.scale.setScalar(u.life); });
+
+  // camera
+  camera.position.x = Math.sin(now * .3) * .6 + (Math.random() - .5) * state.shake;
+  camera.position.y = (Math.random() - .5) * state.shake;
+  camera.position.z = 9 - state.bass * 1.2;
+  camera.rotation.z = state.spin * .02;
+  camera.lookAt(0, 0, 0);
+  effect.render(scene, camera);
+  applyGlitch();
+  drawRain(dt);
+
+  // idle chatter in the terminal
+  if ((sysTimer += dt) > 2.5 + Math.random() * 3) { sysTimer = 0; log(SYS[(Math.random() * SYS.length) | 0], 'sys'); }
+
+  if ((hudTick += dt) > .08) {
+    hudTick = 0;
+    hudL.innerHTML = Object.entries(state.counts).map(([k, v]) => `${k.padEnd(6)}<b>${String(v).padStart(4)}</b>`).join('\n');
+    hudR.innerHTML = `energy <b>${state.energy.toFixed(2)}</b>\ncycle  <b>${state.cycle.toFixed(2)}</b>`;
+  }
+}
+setPalette('phosphor');
+frame();
+
+/* ---------- 8. strudel boot + controls ---------- */
+const status = $('status'), codeEl = $('code');
+initStrudel({
+  prebake: () => Promise.all([
+    samples('github:tidalcycles/dirt-samples'),
+    samples('github:eddyflux/crate'),
+    samples('github:eddyflux/wax'),
+    samples('github:yaxu/clean-breaks'),
+  ]),
+});
+status.textContent = 'ready — press Play';
+log('strudel/web loaded', 'sys'); log('samples: dirt crate wax clean-breaks', 'sys');
+
+const bpm = $('bpm'), bpmV = $('bpmV');
+const applyTempo = () => { bpmV.textContent = bpm.value; if (window.setcps) setcps(bpm.value / 60 / 4); };
+bpm.addEventListener('input', applyTempo);
+const motion = $('motion'), motionV = $('motionV');
+motion.addEventListener('input', () => { state.motion = +motion.value; motionV.textContent = state.motion.toFixed(2); });
+$('palette').addEventListener('change', e => setPalette(e.target.value));
+$('fxCrt').addEventListener('change', e => $('crt').style.display = e.target.checked ? '' : 'none');
+$('fxTerm').addEventListener('change', e => term.style.display = e.target.checked ? '' : 'none');
+$('fold').addEventListener('click', e => { $('panel').classList.toggle('folded'); e.target.textContent = $('panel').classList.contains('folded') ? 'Show code' : 'Hide code'; });
+
+$('play').onclick = async () => {
+  try {
+    const ac = getAudioContext(); if (ac.state !== 'running') await ac.resume();
+    await evaluate(codeEl.value); applyTempo(); status.textContent = 'playing — edit, then Play again'; log('evaluate ok', 'sys'); }
+  catch (err) { status.textContent = 'pattern error: ' + err.message; log('error: ' + err.message, 'hit'); }
+};
+$('stop').onclick = async () => {
+  // hush() stops the scheduler; suspending the context silences tails instantly.
+  // (don't use panic(): in @strudel/web 1.1.0 it nulls the master gain and the
+  //  output chain is never rebuilt, so nothing plays afterwards)
+  try { hush(); } catch (err) { log('hush error: ' + err.message, 'hit'); }
+  try { await getAudioContext().suspend(); } catch (_) {}
+  queue.length = 0;                       // drop visuals already scheduled
+  status.textContent = 'stopped'; log('stop', 'sys');
+};
+codeEl.addEventListener('keydown', e => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') $('play').click(); });
+</script>
+</body>
+</html>

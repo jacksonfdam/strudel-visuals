@@ -1,0 +1,454 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>strudel × mediapipe hands × three.js</title>
+<style>
+  :root{--ink:#04070a;--glyph:#9ff4ee;--hot:#ff7a1a;--dim:#2a4e4f;--hand:#7dff9a}
+  html,body{margin:0;height:100%;background:var(--ink);color:var(--glyph);
+    font:13px/1.45 "IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;overflow:hidden}
+  #stage{position:fixed;inset:0;z-index:1}
+  #stage table{filter:drop-shadow(0 0 6px rgba(159,244,238,.35))}
+  #fx{position:fixed;inset:0;z-index:2;pointer-events:none}
+  #crt{position:fixed;inset:0;z-index:3;pointer-events:none;
+    background:repeating-linear-gradient(0deg,rgba(0,0,0,.22) 0 1px,transparent 1px 3px),
+               radial-gradient(ellipse at center,transparent 55%,rgba(0,0,0,.7) 100%)}
+  .hud{position:fixed;z-index:4;pointer-events:none;color:var(--hot);white-space:pre;opacity:.9}
+  .hud.tl{top:18px;left:20px}
+  .hud.tr{top:18px;right:20px;text-align:right}
+  .hud b{font-weight:400;color:var(--glyph)}
+  #cam{position:fixed;z-index:4;left:20px;bottom:18px;width:200px;aspect-ratio:4/3;object-fit:cover;
+    transform:scaleX(-1);border:1px solid var(--dim);opacity:.55;filter:grayscale(1) contrast(1.2)}
+  #panel{position:fixed;z-index:5;right:20px;bottom:18px;width:min(560px,calc(100vw - 40px));
+    background:rgba(4,7,10,.85);border:1px solid var(--dim);padding:10px 12px}
+  #panel textarea{width:100%;box-sizing:border-box;height:210px;resize:vertical;background:transparent;
+    color:var(--glyph);border:0;outline:none;font:inherit;line-height:1.5}
+  #panel .row{display:flex;gap:10px;align-items:center;margin-top:8px;flex-wrap:wrap}
+  button{font:inherit;background:transparent;color:var(--hot);border:1px solid var(--hot);padding:4px 12px;cursor:pointer}
+  button:hover,button:focus-visible{background:var(--hot);color:var(--ink);outline:none}
+  button.quiet{color:var(--dim);border-color:var(--dim)}
+  button.hand{color:var(--hand);border-color:var(--hand)}
+  #status{color:var(--dim);margin-left:auto}
+  label{display:flex;align-items:center;gap:6px;color:var(--dim);flex:1}
+  label b{font-weight:400;color:var(--hot);min-width:3.5ch;text-align:right}
+  input[type=range]{flex:1;accent-color:var(--hot);height:2px;margin:0}
+  #panel.folded textarea{display:none}
+</style>
+</head>
+<body>
+<div id="stage"></div>
+<canvas id="fx"></canvas>
+<div id="crt"></div>
+<div class="hud tl" id="hudL"></div>
+<div class="hud tr" id="hudR"></div>
+<video id="cam" autoplay muted playsinline></video>
+
+<div id="panel">
+  <textarea id="code" spellcheck="false">// `hand` is live: x y (0..1) pinch (0..1) fingers (0..5) spread hands
+//   slide (−1 left … +1 right, decays after a swipe)   spin (hand roll, rad/s)
+//   pinched (true while thumb+index touch)
+stack(
+  s("bd*2 [~ bd] bd ~").bank("crate")
+    .onTrigger(vis("kick"), false),
+
+  s("~ rim:1 ~ [rim:2 ~ rim:1]").bank("crate").room(.25)
+    .gain(signal(() => hand.fingers >= 2 ? 1 : 0))
+    .speed(signal(() => hand.slide < -.3 ? -1 : 1))      // swipe left → reversed snares
+    .onTrigger(vis("snare"), false),
+
+  s("hh*8").gain("[.5 .9]*4")
+    .hpf(signal(() => 300 + hand.y * 5000))              // hand height → hat brightness
+    .pan(signal(() => hand.x))                           // left/right → stereo
+    .onTrigger(vis("hat"), false),
+
+  s("bass:2*4").n("<0 0 3 5>").gain(.9)
+    .lpf(signal(() => 120 + hand.pinch * 2800))          // pinch → filter cutoff
+    .shape(signal(() => Math.min(.85, Math.abs(hand.spin) * .12))) // spin → drive
+    .onTrigger(vis("bass"), false),
+
+  s("loop4/4").fit().chop(32).dec(.15).hpf(400).postgain(.5)
+    .gain(signal(() => hand.fingers >= 4 ? 1 : 0))
+    .room(signal(() => hand.spread))                     // two hands apart → reverb
+    .onTrigger(vis("break"), false),
+
+  s("cp").gain(signal(() => hand.pinched ? .9 : 0)).room(.3) // a clap while pinched
+    .onTrigger(vis("pinch"), false),
+)</textarea>
+  <div class="row">
+    <label>tempo <input id="bpm" type="range" min="60" max="180" step="1" value="128"> <b id="bpmV">128</b> bpm</label>
+  </div>
+  <div class="row">
+    <button id="camBtn" class="hand">Start camera</button>
+    <button id="camStop" class="quiet" disabled>Stop camera</button>
+    <button id="play">Play</button>
+    <button id="stop" class="quiet">Stop</button>
+    <button id="fold" class="quiet">Hide code</button>
+    <span id="status">loading samples…</span>
+  </div>
+</div>
+
+<script src="https://unpkg.com/@strudel/web@1.1.0"></script>
+<script type="importmap">
+{ "imports": {
+  "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
+  "@mediapipe/tasks-vision": "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs"
+}}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { AsciiEffect } from 'three/addons/effects/AsciiEffect.js';
+import { HandLandmarker, FilesetResolver } from '@mediapipe/tasks-vision';
+
+const $ = id => document.getElementById(id);
+const lerp = (a, b, k) => a + (b - a) * k;
+
+/* ---------- live hand state (read by the strudel code through `hand`) ---------- */
+// defaults = open hand in the middle, so everything plays before the camera is on
+window.hand = { present: false, hands: 0, x: .5, y: .5, pinch: 1, fingers: 5, spread: .2, grab: false,
+  pinched: false, slide: 0, spin: 0, last: '—', tips: [] /* world-space fingertips of all hands */ };
+const raw = { x: .5, y: .5, pinch: 1, spread: .2 };
+const toWorld = (nx, ny) => new THREE.Vector3((nx - .5) * 12, (ny - .5) * 8, 0);   // normalized (mirrored) → scene plane z=0
+
+/* ---------- strudel → visual queue ---------- */
+const queue = [];
+window.vis = (name) => {
+  if (typeof name !== 'string') { try { name = String(name.queryArc(0, 1)[0].value); } catch (_) { name = String(name); } }
+  return (...args) => {
+    const hap = args.find(a => a && typeof a === 'object' && a.whole);
+    if (!hap || hap.value?.gain === 0) return;              // gated-off voices don't draw
+    const t = typeof args[0] === 'number' ? args[0] : args[args.length - 1];
+    queue.push({ t, name, v: hap.value, cycle: hap.whole.begin.valueOf() });
+  };
+};
+
+/* ---------- three.js ascii scene ---------- */
+const renderer = new THREE.WebGLRenderer({ antialias: false });
+const effect = new AsciiEffect(renderer, ' .:-=+*#%@', { invert: true, resolution: .21 });
+effect.domElement.style.color = '#9ff4ee'; effect.domElement.style.backgroundColor = '#04070a';
+$('stage').appendChild(effect.domElement);
+
+const scene = new THREE.Scene();
+scene.fog = new THREE.Fog(0x000000, 6, 60);
+const camera = new THREE.PerspectiveCamera(62, 1, .1, 200); camera.position.z = 9;
+scene.add(new THREE.AmbientLight(0xffffff, .25));
+const lamp = new THREE.PointLight(0xffffff, 60, 40); lamp.position.set(0, 3, 8); scene.add(lamp);
+
+const tunnel = new THREE.Group();
+const frameMat = new THREE.MeshBasicMaterial({ color: 0x446666 });
+for (let i = 0; i < 26; i++) {
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(7, .06, 4, 4), frameMat);
+  ring.rotation.z = Math.PI / 4; ring.position.z = -i * 3.5; tunnel.add(ring);
+}
+scene.add(tunnel);
+
+// the draggable core (Virtual Drag-and-Drop: pinch near it to grab, move, release)
+const coreGeo = new THREE.IcosahedronGeometry(1.6, 3);
+const coreBase = coreGeo.attributes.position.array.slice();
+const core = new THREE.Mesh(coreGeo, new THREE.MeshPhongMaterial({ color: 0xffffff, flatShading: true, shininess: 10 }));
+scene.add(core);
+const coreTarget = new THREE.Vector3();
+const noise3 = (x, y, z, t) => Math.sin(x * 2.1 + t) * Math.sin(y * 2.4 + t * 1.3) * Math.sin(z * 1.7 - t * .8);
+
+// finger satellites: one cube per finger that is up
+const sats = [];
+for (let i = 0; i < 5; i++) {
+  const m = new THREE.Mesh(new THREE.BoxGeometry(.5, .5, .5), new THREE.MeshPhongMaterial({ color: 0xffffff, flatShading: true }));
+  m.userData = { a: (i / 5) * Math.PI * 2, flash: 0 }; scene.add(m); sats.push(m);
+}
+const debris = [];
+for (let i = 0; i < 40; i++) {
+  const m = new THREE.Mesh(new THREE.TetrahedronGeometry(.28), new THREE.MeshPhongMaterial({ color: 0xffffff, flatShading: true }));
+  m.visible = false; m.userData = { v: new THREE.Vector3(), life: 0 }; scene.add(m); debris.push(m);
+}
+
+// orbs: floating objects that fingertips push, and a pinch can pick up
+const orbs = [];
+for (let i = 0; i < 22; i++) {
+  const m = new THREE.Mesh(new THREE.OctahedronGeometry(.32, 0), new THREE.MeshPhongMaterial({ color: 0xffffff, flatShading: true }));
+  const home = new THREE.Vector3((Math.random() - .5) * 11, (Math.random() - .5) * 7, (Math.random() - .5) * 2);
+  m.position.copy(home);
+  m.userData = { home, v: new THREE.Vector3(), phase: Math.random() * 6.28, hot: 0 };
+  scene.add(m); orbs.push(m);
+}
+let held = null;   // orb currently pinched
+
+/* ---------- reactions ---------- */
+const state = { kick: 0, energy: 0, spin: 0, bass: 0, shake: 0, roll: 0, counts: { kick: 0, snare: 0, hat: 0, bass: 0, break: 0, pinch: 0 }, cycle: 0 };
+const REACT = {
+  kick:  () => { state.kick = 1; tunnel.position.z += 3.5; },
+  snare: () => { for (let k = 0; k < 14; k++) { const d = debris.find(x => !x.visible); if (!d) break;
+    d.visible = true; d.position.copy(core.position); d.userData.life = 1;
+    d.userData.v.set(Math.random() - .5, Math.random() - .5, Math.random() * .3).normalize().multiplyScalar(6 + Math.random() * 6); } },
+  hat:   () => { const up = sats.filter(m => m.visible); if (up.length) up[(Math.random() * up.length) | 0].userData.flash = 1; state.spin += .3; },
+  bass:  () => { state.bass = 1; },
+  break: () => { state.shake = .35; },
+  pinch: () => { orbs.forEach(o => o.userData.hot = 1); },
+};
+// gesture one-shots (from the detector, not from the scheduler)
+function onGesture(name, dir) {
+  hand.last = dir ? `${name} ${dir}` : name;
+  if (name === 'slide') {
+    state.roll += dir === 'right' ? 1.2 : -1.2;                           // camera roll kick
+    orbs.forEach(o => o.userData.v.x += (dir === 'right' ? 1 : -1) * (4 + Math.random() * 4)); // fling the field
+  }
+}
+function fire(e) {
+  state.energy = Math.min(1, state.energy + .25);
+  state.counts[e.name] = (state.counts[e.name] || 0) + 1;
+  state.cycle = e.cycle; REACT[e.name]?.(e);
+}
+
+/* ---------- mediapipe hands ---------- */
+const video = $('cam'), fx = $('fx'), fctx = fx.getContext('2d');
+let landmarker = null, lastVideoTime = -1, results = null;
+const TIPS = [8, 12, 16, 20], PIPS = [6, 10, 14, 18];
+const BONES = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
+const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+
+async function startCamera() {
+  $('camBtn').disabled = true; status.textContent = 'loading hand model…';
+  if (!landmarker) {
+    const vision = await FilesetResolver.forVisionTasks('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm');
+    landmarker = await HandLandmarker.createFromOptions(vision, {
+      baseOptions: { modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task', delegate: 'GPU' },
+      runningMode: 'VIDEO', numHands: 2,
+    });
+  }
+  video.srcObject = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480, facingMode: 'user' } });
+  await video.play();
+  $('camBtn').textContent = 'Camera on'; $('camStop').disabled = false; status.textContent = 'tracking — show a hand';
+}
+function stopCamera() {
+  video.srcObject?.getTracks().forEach(tr => tr.stop());
+  video.srcObject = null; results = null; lastVideoTime = -1;
+  Object.assign(hand, { present: false, hands: 0, grab: false, pinched: false, slide: 0, spin: 0, fingers: 5, tips: [] });
+  Object.assign(raw, { x: .5, y: .5, pinch: 1, spread: .2 });
+  held = null; hist.length = 0;
+  $('camBtn').textContent = 'Start camera'; $('camBtn').disabled = false; $('camStop').disabled = true;
+  status.textContent = 'camera off — defaults restored';
+}
+
+// cvzone-style fingersUp(): tip above pip for four fingers, thumb by x relative to handedness
+function fingersUp(lm, handed) {
+  let n = 0;
+  for (let i = 0; i < 4; i++) if (lm[TIPS[i]].y < lm[PIPS[i]].y) n++;
+  const right = handed === 'Right';            // mediapipe labels are already for the mirrored selfie view
+  if (right ? lm[4].x < lm[3].x : lm[4].x > lm[3].x) n++;
+  return n;
+}
+
+/* ---- gesture detector: pinch (edge), slide (fast lateral move), spin (hand roll) ---- */
+const hist = [];                 // { t, x, y, ang } of the first hand, last ~400 ms
+let wasPinched = false, slideCooldown = 0, lastAng = null;
+function detectGestures(lm, tnow) {
+  // pinch: edge-triggered on/off
+  const pinched = raw.pinch < .3;
+  if (pinched && !wasPinched) onGesture('pinch');
+  wasPinched = pinched; hand.pinched = pinched;
+
+  // hand roll: angle of wrist → middle-mcp; unwrap and turn into rad/s
+  const ang = Math.atan2(lm[9].y - lm[0].y, (1 - lm[9].x) - (1 - lm[0].x));
+  hist.push({ t: tnow, x: 1 - lm[9].x, ang });
+  while (hist.length && tnow - hist[0].t > .4) hist.shift();
+  if (lastAng != null && hist.length > 1) {
+    let d = ang - lastAng; if (d > Math.PI) d -= 2 * Math.PI; if (d < -Math.PI) d += 2 * Math.PI;
+    const dt = tnow - hist[hist.length - 2].t || .016;
+    hand.spin = lerp(hand.spin, d / dt, .25);                 // signed rad/s, smoothed
+  }
+  lastAng = ang;
+  if (Math.abs(hand.spin) > 6 && hand.last.indexOf('spin') !== 0) onGesture('spin', hand.spin > 0 ? 'cw' : 'ccw');
+
+  // slide: ≥ 30 % of the frame width in under 400 ms, with cooldown
+  slideCooldown = Math.max(0, slideCooldown - (tnow - (hist[hist.length - 2]?.t ?? tnow)));
+  if (hist.length > 3 && slideCooldown === 0) {
+    const dx = hist[hist.length - 1].x - hist[0].x;
+    if (Math.abs(dx) > .3) { hand.slide = Math.sign(dx); onGesture('slide', dx > 0 ? 'right' : 'left'); slideCooldown = .7; hist.length = 0; }
+  }
+}
+
+function readHands() {
+  if (!landmarker || !video.srcObject || video.readyState < 2 || video.currentTime === lastVideoTime) return;
+  lastVideoTime = video.currentTime;
+  results = landmarker.detectForVideo(video, performance.now());
+  const H = results.landmarks;
+  hand.hands = H.length; hand.present = H.length > 0;
+  hand.tips = [];
+  if (!H.length) { hand.pinched = false; wasPinched = false; return; }
+  for (const lm of H) for (const i of [4, 8, 12, 16, 20]) hand.tips.push(toWorld(1 - lm[i].x, 1 - lm[i].y));
+  const lm = H[0], handed = results.handedness?.[0]?.[0]?.categoryName ?? 'Right';
+  const size = dist(lm[0], lm[9]) || .1;
+  raw.x = 1 - lm[9].x;                                   // mirrored: move right → x grows
+  raw.y = 1 - lm[9].y;                                   // hand up → y grows
+  raw.pinch = Math.min(1, dist(lm[4], lm[8]) / size / 1.2);
+  hand.fingers = fingersUp(lm, handed);
+  if (H.length > 1) raw.spread = Math.min(1, dist(lm[9], H[1][9]) * 1.4);
+  detectGestures(lm, performance.now() / 1000);
+}
+
+function drawHands() {
+  fctx.clearRect(0, 0, fx.width, fx.height);
+  if (!results?.landmarks?.length) return;
+  const W = fx.width, Hh = fx.height;
+  const P = p => [(1 - p.x) * W, p.y * Hh];
+  results.landmarks.forEach((lm, hi) => {
+    const col = hi === 0 ? '#7dff9a' : '#9ff4ee';
+    fctx.strokeStyle = col; fctx.lineWidth = 2; fctx.globalAlpha = .9;
+    fctx.beginPath();
+    for (const [a, b] of BONES) { const [ax, ay] = P(lm[a]), [bx, by] = P(lm[b]); fctx.moveTo(ax, ay); fctx.lineTo(bx, by); }
+    fctx.stroke();
+    fctx.fillStyle = col;
+    lm.forEach((p, i) => { const [x, y] = P(p); fctx.beginPath(); fctx.arc(x, y, i === 4 || i === 8 ? 6 : 3.5, 0, Math.PI * 2); fctx.fill(); });
+    // bounding box + label, cvzone style
+    const xs = lm.map(p => (1 - p.x) * W), ys = lm.map(p => p.y * Hh);
+    const x0 = Math.min(...xs) - 16, y0 = Math.min(...ys) - 16, x1 = Math.max(...xs) + 16, y1 = Math.max(...ys) + 16;
+    fctx.strokeStyle = hand.grab && hi === 0 ? '#ff7a1a' : col; fctx.setLineDash([6, 6]); fctx.strokeRect(x0, y0, x1 - x0, y1 - y0); fctx.setLineDash([]);
+    fctx.font = '12px ui-monospace, Menlo, monospace'; fctx.fillStyle = '#ff7a1a';
+    const label = hi === 0 ? `${hand.fingers} up  pinch ${hand.pinch.toFixed(2)}${hand.grab ? '  holding core' : held ? '  holding orb' : ''}  ${hand.last}` : 'hand 2';
+    fctx.fillText(label, x0, y0 - 6);
+  });
+  fctx.globalAlpha = 1;
+}
+
+/* ---------- loop ---------- */
+const hudL = $('hudL'), hudR = $('hudR'), status = $('status');
+const clock = new THREE.Clock(); let hudTick = 0;
+function resize() {
+  const w = innerWidth, h = innerHeight;
+  camera.aspect = w / h; camera.updateProjectionMatrix();
+  renderer.setSize(w, h); effect.setSize(w, h); fx.width = w; fx.height = h;
+}
+addEventListener('resize', resize); resize();
+
+const ndc = new THREE.Vector3();
+function frame() {
+  requestAnimationFrame(frame);
+  const dt = Math.min(clock.getDelta(), .05), t = clock.elapsedTime;
+  const now = window.getAudioContext ? getAudioContext().currentTime : 0;
+
+  readHands();
+  // smooth the raw readings before audio and visuals use them
+  hand.x = lerp(hand.x, raw.x, .25); hand.y = lerp(hand.y, raw.y, .25);
+  hand.pinch = lerp(hand.pinch, raw.pinch, .3); hand.spread = lerp(hand.spread, raw.spread, .15);
+
+  for (let i = queue.length - 1; i >= 0; i--) if (queue[i].t <= now + 1 / 60) { fire(queue[i]); queue.splice(i, 1); }
+
+  state.kick *= Math.exp(-dt * 9); state.energy *= Math.exp(-dt * 2.2); state.spin *= Math.exp(-dt * 3);
+  state.bass *= Math.exp(-dt * 4); state.shake *= Math.exp(-dt * 10); state.roll *= Math.exp(-dt * 3);
+  hand.slide *= Math.exp(-dt * 2.5); if (!hand.present) hand.spin *= Math.exp(-dt * 4);
+
+  // ---- gesture → scene ----
+  const handWorld = toWorld(hand.x, hand.y);
+  const indexTip = hand.tips[1] ?? handWorld;
+
+  // pinch = pick up: the core if it is near, else the closest orb within reach
+  if (hand.present && hand.pinched) {
+    if (!hand.grab && !held) {
+      if (indexTip.distanceTo(core.position) < 2.4) hand.grab = true;
+      else { let best = null, bd = 1.6; for (const o of orbs) { const d = indexTip.distanceTo(o.position); if (d < bd) { bd = d; best = o; } } held = best; }
+    }
+  } else { hand.grab = false; held = null; }
+  if (hand.grab) coreTarget.copy(indexTip);
+  core.position.lerp(coreTarget, .2);
+  if (held) { held.position.lerp(indexTip, .5); held.userData.v.set(0, 0, 0); held.userData.hot = 1; }
+  lamp.position.set(core.position.x, core.position.y + 3, 8);
+
+  // orbs: fingertips push anything within reach; springs pull them home
+  for (const o of orbs) {
+    const u = o.userData;
+    if (o !== held) {
+      for (const tip of hand.tips) {
+        const d = o.position.distanceTo(tip);
+        if (d < 1.3 && d > 1e-4) { const push = (1.3 - d) * 28; u.v.addScaledVector(o.position.clone().sub(tip).normalize(), push * dt); u.hot = Math.max(u.hot, .6); }
+      }
+      u.v.addScaledVector(u.home.clone().sub(o.position), dt * 1.8);        // spring
+      u.v.multiplyScalar(1 - dt * 2.2);                                        // damping
+      o.position.addScaledVector(u.v, dt);
+      o.position.y += Math.sin(t * 1.3 + u.phase) * dt * .25;                 // idle float
+    }
+    u.hot *= Math.exp(-dt * 5);
+    o.scale.setScalar(1 + u.hot * .9);
+    o.rotation.x += dt * (.4 + u.hot * 5); o.rotation.y += dt * .3;
+  }
+
+  // hand x → tunnel rotation, spin gesture adds torque, slide adds roll; spread → tunnel breathes
+  tunnel.rotation.z += dt * ((hand.x - .5) * 1.6 + hand.spin * .35);
+  tunnel.position.z += dt * (1.2 + state.energy * 4);
+  if (tunnel.position.z > 3.5) tunnel.position.z -= 3.5;
+  tunnel.scale.setScalar(1 + hand.spread * .4);
+  frameMat.color.setScalar(.27 + state.bass * .6 + Math.min(.3, Math.abs(hand.spin) * .04));
+
+  // open hand = calm surface, closed = noisy blob (plus bass/energy)
+  const p = coreGeo.attributes.position.array;
+  const amp = .08 + (1 - hand.pinch) * .5 + state.bass * .4 + state.energy * .1, sc = 1 + state.kick * .5;
+  for (let i = 0; i < p.length; i += 3) {
+    const x = coreBase[i], y = coreBase[i + 1], z = coreBase[i + 2];
+    const k = sc * (1 + amp * noise3(x, y, z, t * 1.5));
+    p[i] = x * k; p[i + 1] = y * k; p[i + 2] = z * k;
+  }
+  coreGeo.attributes.position.needsUpdate = true; coreGeo.computeVertexNormals();
+  core.rotation.y += dt * (.6 + state.spin + hand.spin * .8); core.rotation.x += dt * .3;
+  lamp.intensity = 40 + state.kick * 160;
+
+  // one satellite per finger up
+  sats.forEach((m, i) => {
+    const u = m.userData; m.visible = i < hand.fingers;
+    u.a += dt * (.7 + state.spin); u.flash *= Math.exp(-dt * 8);
+    m.position.set(core.position.x + Math.cos(u.a) * 3.6, core.position.y + Math.sin(u.a * .8) * 1.2, Math.sin(u.a) * 2.2);
+    m.scale.setScalar(1 + u.flash * 2.2);
+  });
+  debris.forEach(m => { if (!m.visible) return; const u = m.userData; u.life -= dt * 1.6;
+    if (u.life <= 0) { m.visible = false; return; }
+    m.position.addScaledVector(u.v, dt); u.v.multiplyScalar(1 - dt * 1.5); m.rotation.x += dt * 6; m.scale.setScalar(u.life); });
+
+  camera.position.x = (Math.random() - .5) * state.shake; camera.position.y = (Math.random() - .5) * state.shake;
+  camera.position.z = 9 - state.bass * 1.2; camera.lookAt(0, 0, 0);
+  camera.rotation.z += state.roll * .12;
+  effect.render(scene, camera);
+  drawHands();
+
+  if ((hudTick += dt) > .08) {
+    hudTick = 0;
+    hudL.innerHTML = Object.entries(state.counts).map(([k, v]) => `${k.padEnd(6)}<b>${String(v).padStart(4)}</b>`).join('\n');
+    hudR.innerHTML = [
+      `hands   <b>${hand.hands}</b>`, `x       <b>${hand.x.toFixed(2)}</b>`, `y       <b>${hand.y.toFixed(2)}</b>`,
+      `pinch   <b>${hand.pinch.toFixed(2)}</b>`, `fingers <b>${hand.fingers}</b>`, `spread  <b>${hand.spread.toFixed(2)}</b>`,
+      `slide   <b>${hand.slide.toFixed(2)}</b>`, `spin    <b>${hand.spin.toFixed(1)}</b>`,
+      `holding <b>${hand.grab ? 'core' : held ? 'orb' : '—'}</b>`, `gesture <b>${hand.last}</b>`,
+    ].join('\n');
+  }
+}
+frame();
+
+/* ---------- strudel boot + controls ---------- */
+const codeEl = $('code');
+initStrudel({
+  prebake: () => Promise.all([
+    samples('github:tidalcycles/dirt-samples'), samples('github:eddyflux/crate'), samples('github:yaxu/clean-breaks'),
+  ]),
+});
+status.textContent = 'ready — start camera, then Play';
+
+const bpm = $('bpm'), bpmV = $('bpmV');
+const applyTempo = () => { bpmV.textContent = bpm.value; if (window.setcps) setcps(bpm.value / 60 / 4); };
+bpm.addEventListener('input', applyTempo);
+$('camBtn').onclick = () => startCamera().catch(err => { status.textContent = 'camera: ' + err.message; $('camBtn').disabled = false; });
+$('camStop').onclick = stopCamera;
+$('fold').onclick = e => { $('panel').classList.toggle('folded'); e.target.textContent = $('panel').classList.contains('folded') ? 'Show code' : 'Hide code'; };
+$('play').onclick = async () => {
+  try {
+    const ac = getAudioContext(); if (ac.state !== 'running') await ac.resume();
+    await evaluate(codeEl.value); applyTempo(); status.textContent = 'playing — hands control the sound';
+  } catch (err) { status.textContent = 'pattern error: ' + err.message; }
+};
+$('stop').onclick = async () => {
+  try { hush(); } catch (_) {}
+  try { await getAudioContext().suspend(); } catch (_) {}
+  queue.length = 0; status.textContent = 'stopped';
+};
+codeEl.addEventListener('keydown', e => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') $('play').click(); });
+</script>
+</body>
+</html>

@@ -1,0 +1,479 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>strudel × mediapipe × three.js — audio-reactive point cloud</title>
+<style>
+  :root{--a:#ff2bd6;--b:#00f0ff;--c:#ffb000;--d:#7dff9a;--ink:#05030d;--fg:#eaf6ff}
+  html,body{margin:0;height:100%;background:var(--ink);color:var(--fg);
+    font:12px/1.45 "IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;overflow:hidden}
+  /* colored, breathing background — repainted from JS */
+  #bg{position:fixed;inset:-20%;z-index:0;filter:blur(40px) saturate(1.4);transition:opacity .4s}
+  #gl{position:fixed;inset:0;z-index:1}
+  #hud{position:fixed;inset:0;z-index:2;pointer-events:none}
+  #grain{position:fixed;inset:0;z-index:3;pointer-events:none;opacity:.35;mix-blend-mode:overlay;
+    background:repeating-linear-gradient(0deg,rgba(255,255,255,.06) 0 1px,transparent 1px 3px)}
+  #cam{position:fixed;z-index:4;left:16px;bottom:16px;width:160px;aspect-ratio:4/3;object-fit:cover;transform:scaleX(-1);
+    border:1px solid rgba(255,255,255,.25);opacity:.5}
+  #panel{position:fixed;z-index:5;right:16px;bottom:16px;width:min(600px,calc(100vw - 32px));
+    background:rgba(5,3,13,.78);backdrop-filter:blur(8px);border:1px solid rgba(255,255,255,.18);padding:10px 12px}
+  #panel textarea{width:100%;box-sizing:border-box;height:150px;resize:vertical;background:transparent;color:var(--fg);
+    border:0;outline:none;font:inherit;line-height:1.5}
+  .row{display:flex;gap:10px;align-items:center;margin-top:8px;flex-wrap:wrap}
+  button{font:inherit;background:transparent;color:var(--fg);border:1px solid rgba(255,255,255,.4);padding:4px 12px;cursor:pointer}
+  button:hover,button:focus-visible{background:var(--fg);color:var(--ink);outline:none}
+  button.acc{border-color:var(--b);color:var(--b)} button.acc:hover{background:var(--b);color:var(--ink)}
+  #status{opacity:.6;margin-left:auto}
+  label{display:flex;align-items:center;gap:6px;opacity:.75}
+  label.slide{flex:1}
+  label b{font-weight:400;min-width:3ch;text-align:right;opacity:1}
+  input[type=range]{flex:1;accent-color:var(--b);height:2px;margin:0}
+  input[type=checkbox]{accent-color:var(--b);margin:0}
+  select{font:inherit;background:var(--ink);color:var(--fg);border:1px solid rgba(255,255,255,.3);padding:2px 6px}
+  #panel.folded textarea{display:none}
+</style>
+</head>
+<body>
+<div id="bg"></div>
+<div id="gl"></div>
+<canvas id="hud"></canvas>
+<div id="grain"></div>
+<video id="cam" autoplay muted playsinline></video>
+
+<div id="panel">
+  <textarea id="code" spellcheck="false">// live objects: hand {x y pinch fingers pinched}  head {x y tilt present}  audio {bass mid high}
+stack(
+  s("bd*2 [~ bd] bd ~").bank("crate").onTrigger(vis("kick"), false),
+  s("~ rim:1 ~ [rim:2 ~ rim:1]").bank("crate").room(.25)
+    .gain(signal(() => hand.fingers >= 2 ? 1 : 0)).onTrigger(vis("snare"), false),
+  s("hh*8").gain("[.5 .9]*4").hpf(signal(() => 300 + hand.y * 5000))
+    .pan(signal(() => head.present ? head.x : .5)).onTrigger(vis("hat"), false),   // head position → pan
+  s("bass:2*4").n("<0 0 3 5>").gain(.9).lpf(signal(() => 120 + hand.pinch * 2800)).onTrigger(vis("bass"), false),
+  s("loop4/4").fit().chop(32).dec(.15).hpf(400).postgain(.5)
+    .gain(signal(() => hand.fingers >= 4 ? 1 : 0)).onTrigger(vis("break"), false),
+  note("<c3 eb3 g3 bb3>*2").s("sawtooth").lpf(signal(() => 400 + Math.abs(head.tilt) * 3000)) // head tilt → synth filter
+    .dec(.3).gain(.25).room(.5).onTrigger(vis("pad"), false),
+)</textarea>
+  <div class="row">
+    <label class="slide">tempo <input id="bpm" type="range" min="60" max="180" value="126"> <b id="bpmV">126</b></label>
+    <label class="slide">density <input id="density" type="range" min="2" max="8" step="1" value="4"> <b id="densityV">4</b></label>
+    <label class="slide">depth <input id="depth" type="range" min="0" max="8" step=".1" value="3"> <b id="depthV">3.0</b></label>
+  </div>
+  <div class="row">
+    <label>mode <select id="mode"><option value="cloud">point cloud</option><option value="hud">hud kit</option><option value="both" selected>both</option></select></label>
+    <label>palette <select id="palette">
+      <option value="neon">neon</option><option value="acid">acid</option><option value="ember" selected>ember</option><option value="ice">ice</option><option value="mono">mono</option></select></label>
+    <label><input type="checkbox" id="tBody" checked> body</label>
+    <label><input type="checkbox" id="tFace" checked> face</label>
+    <label><input type="checkbox" id="tHands" checked> hands</label>
+    <label><input type="checkbox" id="tInvert"> invert mask</label>
+    <label class="slide">cam color <input id="camMix" type="range" min="0" max="1" step=".05" value=".5"> <b id="camMixV">.5</b></label>
+  </div>
+  <div class="row">
+    <button id="camBtn" class="acc">Start camera</button>
+    <button id="camStop">Stop camera</button>
+    <button id="play">Play</button>
+    <button id="stop">Stop</button>
+    <button id="fold">Hide code</button>
+    <span id="status">loading samples…</span>
+  </div>
+</div>
+
+<script>
+// tap whatever strudel connects to the speakers → analyser. Installed before strudel loads.
+(() => {
+  const orig = AudioNode.prototype.connect;
+  AudioNode.prototype.connect = function (dest, ...rest) {
+    if (dest instanceof AudioDestinationNode && window.__tap && this !== window.__tap) { try { orig.call(this, window.__tap); } catch (_) {} }
+    return orig.call(this, dest, ...rest);
+  };
+})();
+</script>
+<script src="https://unpkg.com/@strudel/web@1.1.0"></script>
+<script type="importmap">
+{ "imports": {
+  "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
+  "@mediapipe/tasks-vision": "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs"
+}}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { HandLandmarker, FaceLandmarker, ImageSegmenter, FilesetResolver } from '@mediapipe/tasks-vision';
+
+const $ = id => document.getElementById(id);
+const lerp = (a, b, k) => a + (b - a) * k;
+const MP = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm';
+const MODELS = {
+  hand: 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task',
+  face: 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',
+  seg:  'https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/latest/selfie_segmenter.tflite',
+};
+
+/* ---------- live state shared with the strudel code ---------- */
+window.hand  = { present: false, x: .5, y: .5, pinch: 1, fingers: 5, pinched: false, tips: [] };
+window.head  = { present: false, x: .5, y: .5, tilt: 0, box: null };
+window.audio = { bass: 0, mid: 0, high: 0, level: 0 };
+const raw = { x: .5, y: .5, pinch: 1 };
+
+/* ---------- palettes (3 audio bands + accent) ---------- */
+const PAL = {
+  neon:  ['#ff2bd6', '#00f0ff', '#ffe600', '#7dff9a', '#12002a'],
+  acid:  ['#39ff14', '#ff00a0', '#00e5ff', '#ffff00', '#001a08'],
+  ember: ['#ff3c00', '#ffb000', '#ff0066', '#00c8ff', '#0a0208'],
+  ice:   ['#00b3ff', '#7dffe8', '#ffffff', '#b388ff', '#020a14'],
+  mono:  ['#ffffff', '#d0d0d0', '#a0a0a0', '#ffffff', '#000000'],
+};
+let pal = PAL.ember.map(c => new THREE.Color(c));
+function setPalette(name) {
+  pal = PAL[name].map(c => new THREE.Color(c));
+  const r = document.documentElement.style;
+  ['--a', '--b', '--c', '--d', '--ink'].forEach((v, i) => r.setProperty(v, PAL[name][i]));
+}
+
+/* ---------- strudel → visual queue ---------- */
+const queue = [];
+window.vis = (name) => {
+  if (typeof name !== 'string') { try { name = String(name.queryArc(0, 1)[0].value); } catch (_) { name = String(name); } }
+  return (...args) => {
+    const hap = args.find(a => a && typeof a === 'object' && a.whole);
+    if (!hap || hap.value?.gain === 0) return;
+    const t = typeof args[0] === 'number' ? args[0] : args[args.length - 1];
+    queue.push({ t, name, v: hap.value, cycle: hap.whole.begin.valueOf() });
+  };
+};
+
+/* ---------- three.js ---------- */
+const renderer = new THREE.WebGLRenderer({ antialias: false, alpha: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
+$('gl').appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(60, 1, .1, 100); camera.position.z = 10;
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), .9, .6, .15);
+composer.addPass(bloom);
+
+// visible plane at z=0 with 60° fov and camera z=10 → height ≈ 11.5
+const PH = 11.5, PW = PH * 4 / 3;
+const toWorld = (nx, ny) => new THREE.Vector3(((1 - nx) - .5) * PW, (.5 - ny) * PH, 0);
+
+const pointsMat = (size) => new THREE.PointsMaterial({ size, vertexColors: true, transparent: true, opacity: .9,
+  blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: true });
+
+// body cloud — sampled from the segmented camera frame
+const GW = 160, GH = 120, NB = GW * GH;
+const bodyGeo = new THREE.BufferGeometry();
+bodyGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(NB * 3), 3));
+bodyGeo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(NB * 3), 3));
+const body = new THREE.Points(bodyGeo, pointsMat(.09)); scene.add(body);
+bodyGeo.setDrawRange(0, 0);
+
+// face cloud — 478 landmarks
+const faceGeo = new THREE.BufferGeometry();
+faceGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(478 * 3), 3));
+faceGeo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(478 * 3), 3));
+const face = new THREE.Points(faceGeo, pointsMat(.07)); scene.add(face); faceGeo.setDrawRange(0, 0);
+
+// hand particles — emitted from fingertips
+const NP = 3000;
+const partGeo = new THREE.BufferGeometry();
+const pPos = new Float32Array(NP * 3), pCol = new Float32Array(NP * 3), pVel = new Float32Array(NP * 3), pLife = new Float32Array(NP);
+partGeo.setAttribute('position', new THREE.BufferAttribute(pPos, 3));
+partGeo.setAttribute('color', new THREE.BufferAttribute(pCol, 3));
+const parts = new THREE.Points(partGeo, pointsMat(.11)); scene.add(parts);
+let pHead = 0;
+function emit(at, n, speed, col) {
+  for (let k = 0; k < n; k++) {
+    const i = pHead++ % NP, j = i * 3;
+    pPos[j] = at.x; pPos[j + 1] = at.y; pPos[j + 2] = at.z;
+    pVel[j] = (Math.random() - .5) * speed; pVel[j + 1] = (Math.random() - .5) * speed; pVel[j + 2] = (Math.random() - .3) * speed;
+    pCol[j] = col.r; pCol[j + 1] = col.g; pCol[j + 2] = col.b; pLife[i] = 1;
+  }
+}
+
+/* ---------- audio analysis ---------- */
+let analyser = null, freq = null, wave = null;
+function ensureTap() {
+  if (analyser || !window.getAudioContext) return;
+  const ac = getAudioContext();
+  analyser = ac.createAnalyser(); analyser.fftSize = 1024; analyser.smoothingTimeConstant = .8;
+  freq = new Uint8Array(analyser.frequencyBinCount); wave = new Uint8Array(analyser.fftSize);
+  window.__tap = analyser;
+}
+function readAudio() {
+  if (!analyser) return;
+  analyser.getByteFrequencyData(freq); analyser.getByteTimeDomainData(wave);
+  const band = (a, b) => { let s = 0; for (let i = a; i < b; i++) s += freq[i]; return s / (b - a) / 255; };
+  audio.bass = lerp(audio.bass, band(1, 8), .5); audio.mid = lerp(audio.mid, band(8, 60), .4); audio.high = lerp(audio.high, band(60, 300), .4);
+  audio.level = (audio.bass + audio.mid + audio.high) / 3;
+}
+
+/* ---------- reactions ---------- */
+const state = { kick: 0, snare: 0, energy: 0, flip: 0, counts: {}, cycle: 0, tick: 0 };
+const REACT = {
+  kick:  () => { state.kick = 1; for (const tp of hand.tips) emit(tp, 40, 5, pal[0]); if (head.present) emit(toWorld(head.x, head.y), 60, 3, pal[1]); },
+  snare: () => { state.snare = 1; state.flip = 1 - state.flip; },
+  hat:   () => { const tp = hand.tips[(Math.random() * hand.tips.length) | 0]; if (tp) emit(tp, 12, 2.5, pal[2]); },
+  bass:  () => { state.energy = Math.min(1, state.energy + .4); },
+  break: () => { state.kick = Math.max(state.kick, .6); },
+  pad:   () => {},
+};
+function fire(e) { state.counts[e.name] = (state.counts[e.name] || 0) + 1; state.cycle = e.cycle; state.tick++; REACT[e.name]?.(e); }
+
+/* ---------- mediapipe ---------- */
+const video = $('cam'), status = $('status');
+const off = document.createElement('canvas'); off.width = GW; off.height = GH; const octx = off.getContext('2d', { willReadFrequently: true });
+let hands = null, faces = null, seg = null, lastT = -1, handRes = null, faceRes = null, maskArr = null, maskW = 0, maskH = 0;
+
+async function startCamera() {
+  $('camBtn').disabled = true; status.textContent = 'loading models…';
+  if (!hands) {
+    const vision = await FilesetResolver.forVisionTasks(MP);
+    const gpu = { delegate: 'GPU' };
+    [hands, faces, seg] = await Promise.all([
+      HandLandmarker.createFromOptions(vision, { baseOptions: { modelAssetPath: MODELS.hand, ...gpu }, runningMode: 'VIDEO', numHands: 2 }),
+      FaceLandmarker.createFromOptions(vision, { baseOptions: { modelAssetPath: MODELS.face, ...gpu }, runningMode: 'VIDEO', numFaces: 1 }),
+      ImageSegmenter.createFromOptions(vision, { baseOptions: { modelAssetPath: MODELS.seg, ...gpu }, runningMode: 'VIDEO', outputConfidenceMasks: true, outputCategoryMask: false }),
+    ]);
+  }
+  video.srcObject = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480, facingMode: 'user' } });
+  await video.play();
+  $('camBtn').textContent = 'Camera on'; status.textContent = 'tracking';
+}
+function stopCamera() {
+  video.srcObject?.getTracks().forEach(t => t.stop()); video.srcObject = null;
+  handRes = faceRes = null; maskArr = null; lastT = -1;
+  Object.assign(hand, { present: false, pinch: 1, fingers: 5, pinched: false, tips: [] }); Object.assign(raw, { x: .5, y: .5, pinch: 1 });
+  Object.assign(head, { present: false, tilt: 0, box: null });
+  bodyGeo.setDrawRange(0, 0); faceGeo.setDrawRange(0, 0);
+  $('camBtn').textContent = 'Start camera'; $('camBtn').disabled = false; status.textContent = 'camera off';
+}
+const TIPS = [8, 12, 16, 20], PIPS = [6, 10, 14, 18];
+const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+
+function track() {
+  if (!hands || !video.srcObject || video.readyState < 2 || video.currentTime === lastT) return;
+  lastT = video.currentTime; const now = performance.now();
+  if ($('tHands').checked) {
+    handRes = hands.detectForVideo(video, now);
+    const H = handRes.landmarks; hand.present = H.length > 0; hand.tips = [];
+    for (const lm of H) for (const i of [4, 8, 12, 16, 20]) hand.tips.push(toWorld(lm[i].x, lm[i].y));
+    if (H.length) {
+      const lm = H[0], right = (handRes.handedness?.[0]?.[0]?.categoryName ?? 'Right') === 'Right';
+      const size = dist(lm[0], lm[9]) || .1;
+      raw.x = 1 - lm[9].x; raw.y = 1 - lm[9].y; raw.pinch = Math.min(1, dist(lm[4], lm[8]) / size / 1.2);
+      let n = 0; for (let i = 0; i < 4; i++) if (lm[TIPS[i]].y < lm[PIPS[i]].y) n++;
+      if (right ? lm[4].x < lm[3].x : lm[4].x > lm[3].x) n++;
+      hand.fingers = n; hand.pinched = raw.pinch < .3;
+    } else hand.pinched = false;
+  } else { hand.present = false; hand.tips = []; }
+
+  if ($('tFace').checked) {
+    faceRes = faces.detectForVideo(video, now);
+    const F = faceRes.faceLandmarks; head.present = F.length > 0;
+    if (F.length) {
+      const lm = F[0], le = lm[33], re = lm[263], nose = lm[1];
+      head.x = lerp(head.x, 1 - nose.x, .3); head.y = lerp(head.y, 1 - nose.y, .3);
+      head.tilt = lerp(head.tilt, Math.atan2(re.y - le.y, re.x - le.x), .3);
+      let x0 = 1, y0 = 1, x1 = 0, y1 = 0; for (const p of lm) { if (p.x < x0) x0 = p.x; if (p.y < y0) y0 = p.y; if (p.x > x1) x1 = p.x; if (p.y > y1) y1 = p.y; }
+      head.box = [x0, y0, x1, y1];
+      const P = faceGeo.attributes.position.array, C = faceGeo.attributes.color.array;
+      for (let i = 0; i < lm.length; i++) {
+        const w = toWorld(lm[i].x, lm[i].y); P[i * 3] = w.x; P[i * 3 + 1] = w.y; P[i * 3 + 2] = -lm[i].z * PW + .4;
+        const c = pal[(i % 3)]; C[i * 3] = c.r; C[i * 3 + 1] = c.g; C[i * 3 + 2] = c.b;
+      }
+      faceGeo.attributes.position.needsUpdate = true; faceGeo.attributes.color.needsUpdate = true; faceGeo.setDrawRange(0, lm.length);
+    } else faceGeo.setDrawRange(0, 0);
+  } else { head.present = false; faceGeo.setDrawRange(0, 0); }
+
+  if ($('tBody').checked) {
+    const r = seg.segmentForVideo(video, now);
+    const masks = r.confidenceMasks; const m = masks[masks.length > 1 ? 1 : 0];
+    maskArr = m.getAsFloat32Array(); maskW = m.width; maskH = m.height;
+    masks.forEach(mm => mm.close());
+    octx.drawImage(video, 0, 0, GW, GH);
+  } else maskArr = null;
+}
+
+/* ---------- body cloud update ---------- */
+const bodyTmp = new THREE.Color();
+function updateBody(t) {
+  if (!maskArr) { bodyGeo.setDrawRange(0, 0); return; }
+  const step = +$('density').value, depth = +$('depth').value, mix = +$('camMix').value, inv = $('tInvert').checked;
+  const img = octx.getImageData(0, 0, GW, GH).data;
+  const P = bodyGeo.attributes.position.array, C = bodyGeo.attributes.color.array;
+  let n = 0;
+  const punch = state.kick * 1.5, wob = .3 + state.energy * 1.2;
+  for (let gy = 0; gy < GH; gy += step) for (let gx = 0; gx < GW; gx += step) {
+    const mx = (gx / GW * maskW) | 0, my = (gy / GH * maskH) | 0;
+    let conf = maskArr[my * maskW + mx]; if (inv) conf = 1 - conf;
+    if (conf < .5) continue;
+    const i = (gy * GW + gx) * 4, r = img[i] / 255, g = img[i + 1] / 255, b = img[i + 2] / 255, lum = .3 * r + .59 * g + .11 * b;
+    const w = toWorld(gx / GW, gy / GH);
+    const nz = Math.sin(w.x * 1.7 + t * 1.3) * Math.sin(w.y * 2.1 - t) * wob;
+    P[n * 3] = w.x; P[n * 3 + 1] = w.y; P[n * 3 + 2] = (lum - .5) * depth + nz + punch * lum;
+    // color: band-weighted palette by height, mixed with the camera pixel
+    const k = (w.y / PH + .5);
+    bodyTmp.copy(pal[state.flip ? 1 : 0]).lerp(pal[state.flip ? 0 : 1], k).lerp(pal[2], audio.high * .8);
+    bodyTmp.r = lerp(bodyTmp.r, r, mix); bodyTmp.g = lerp(bodyTmp.g, g, mix); bodyTmp.b = lerp(bodyTmp.b, b, mix);
+    const gain = .55 + lum * .6 + audio.bass * .8;
+    C[n * 3] = bodyTmp.r * gain; C[n * 3 + 1] = bodyTmp.g * gain; C[n * 3 + 2] = bodyTmp.b * gain;
+    n++;
+  }
+  bodyGeo.attributes.position.needsUpdate = true; bodyGeo.attributes.color.needsUpdate = true; bodyGeo.setDrawRange(0, n);
+  body.material.size = .06 * step * (1 + audio.bass * .8 + state.kick * .5) / 2;
+}
+
+/* ---------- HUD kit (canvas 2D, monochrome) ---------- */
+const hud = $('hud'), hctx = hud.getContext('2d');
+function drawHud(t) {
+  const W = hud.width, H = hud.height; hctx.clearRect(0, 0, W, H);
+  if ($('mode').value === 'cloud') return;
+  const fg = 'rgba(255,255,255,.85)', dim = 'rgba(255,255,255,.35)';
+  hctx.lineWidth = 1; hctx.font = '10px ui-monospace, Menlo, monospace'; hctx.textBaseline = 'top';
+  // frame + chevrons + header (image 3 top-centre)
+  hctx.strokeStyle = dim; hctx.strokeRect(24.5, 24.5, W - 49, H - 49);
+  hctx.fillStyle = fg; hctx.fillText('>>>> >', 36, 34); hctx.fillText(`strudel/web  ·  ${String($('palette').value).toUpperCase()}  ·  ${$('bpm').value} BPM`, 90, 34);
+  hctx.fillStyle = dim; hctx.fillRect(36, 48, W * .28 * (.4 + audio.level), 1);
+  // band meters (left)
+  [['bass', audio.bass], ['mid', audio.mid], ['high', audio.high]].forEach(([k, v], i) => {
+    const x = 44 + i * 22, y0 = 90, h = 220;
+    hctx.strokeStyle = dim; hctx.strokeRect(x + .5, y0 + .5, 8, h);
+    for (let j = 0; j <= 10; j++) hctx.fillRect(x - 4, y0 + j * h / 10, 3, 1);
+    hctx.fillStyle = fg; hctx.fillRect(x + 1, y0 + h - v * h, 7, v * h);
+    hctx.fillStyle = dim; hctx.fillText(k, x - 4, y0 + h + 6);
+  });
+  // spectrum box (top right)
+  if (freq) {
+    const bx = W - 220, by = 70, bw = 180, bh = 60;
+    hctx.strokeStyle = dim; hctx.strokeRect(bx + .5, by + .5, bw, bh);
+    hctx.fillStyle = fg; for (let i = 0; i < 32; i++) { const v = freq[i * 4] / 255 * bh; hctx.fillRect(bx + 4 + i * 5.5, by + bh - v, 3, v); }
+    hctx.fillStyle = dim; hctx.fillText('spectrum 0–4k', bx, by + bh + 6);
+    // waveform
+    hctx.strokeStyle = fg; hctx.beginPath();
+    for (let i = 0; i < 180; i++) { const v = wave[i * 5] / 255; const x = bx + i, y = by + 100 + (v - .5) * 40; i ? hctx.lineTo(x, y) : hctx.moveTo(x, y); }
+    hctx.stroke();
+  }
+  // level indicator + counters (bottom centre)
+  const lx = W * .5 - 140, ly = H - 96;
+  hctx.fillStyle = dim; hctx.fillRect(lx, ly, 280, 12); hctx.fillStyle = fg; hctx.fillRect(lx, ly, 280 * audio.level, 12);
+  hctx.fillStyle = '#000'; hctx.fillText(`LEVEL INDICATOR ${Math.round(audio.level * 100)} %`, lx + 6, ly + 1);
+  for (let i = 0; i < 8; i++) {
+    const on = (Math.floor(state.cycle * 4) % 8) === i;
+    hctx.fillStyle = on ? fg : 'transparent'; hctx.fillRect(lx + i * 36, ly + 22, 30, 16);
+    hctx.strokeStyle = dim; hctx.strokeRect(lx + i * 36 + .5, ly + 22.5, 30, 16);
+    hctx.fillStyle = on ? '#000' : dim; hctx.fillText(String(i).padStart(2, '0'), lx + i * 36 + 9, ly + 25);
+  }
+  for (let i = 0; i < 16; i++) { hctx.fillStyle = dim; hctx.fillText('+', lx + i * 18, ly + 46); }
+  // hand rings (image 1): tick ring around each palm, radius from pinch, rotates with time/energy
+  if (handRes?.landmarks) for (const lm of handRes.landmarks) {
+    const cx = (1 - lm[9].x) * W, cy = lm[9].y * H, R = 60 + (1 - hand.pinch) * 40 + state.kick * 20;
+    hctx.strokeStyle = fg;
+    for (let i = 0; i < 60; i++) {
+      const a = i / 60 * Math.PI * 2 + t * (.6 + audio.level * 2), long = i % 5 === 0;
+      const r0 = R, r1 = R + (long ? 14 : 7) + audio.high * 12 * Math.random();
+      hctx.beginPath(); hctx.moveTo(cx + Math.cos(a) * r0, cy + Math.sin(a) * r0); hctx.lineTo(cx + Math.cos(a) * r1, cy + Math.sin(a) * r1); hctx.stroke();
+    }
+    hctx.strokeStyle = dim; hctx.beginPath(); hctx.arc(cx, cy, R - 10, 0, Math.PI * 2); hctx.stroke();
+    hctx.beginPath(); hctx.arc(cx, cy, R - 14, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * hand.pinch); hctx.stroke();
+    hctx.fillStyle = fg; hctx.fillText(`PINCH ${hand.pinch.toFixed(2)}`, cx + R + 22, cy - 8); hctx.fillText(`FINGERS ${hand.fingers}`, cx + R + 22, cy + 4);
+    hctx.fillStyle = fg; for (const i of [4, 8, 12, 16, 20]) { hctx.beginPath(); hctx.arc((1 - lm[i].x) * W, lm[i].y * H, 3, 0, 7); hctx.fill(); }
+  }
+  // face brackets
+  if (head.box) {
+    const [x0, y0, x1, y1] = head.box, bx = (1 - x1) * W - 20, by = y0 * H - 20, bw = (x1 - x0) * W + 40, bh = (y1 - y0) * H + 40, L = 18;
+    hctx.strokeStyle = fg;
+    [[bx, by, 1, 1], [bx + bw, by, -1, 1], [bx, by + bh, 1, -1], [bx + bw, by + bh, -1, -1]].forEach(([x, y, sx, sy]) => {
+      hctx.beginPath(); hctx.moveTo(x, y + sy * L); hctx.lineTo(x, y); hctx.lineTo(x + sx * L, y); hctx.stroke(); });
+    hctx.fillStyle = fg; hctx.fillText(`FACE TRACKING  tilt ${(head.tilt * 57.3).toFixed(0)}°`, bx, by - 14);
+    hctx.strokeStyle = dim; hctx.beginPath(); hctx.moveTo(bx + bw / 2, by - 30); hctx.lineTo(bx + bw / 2, by - 20); hctx.stroke();
+  }
+  // event counters (bottom-left, above cam)
+  let yy = H - 240; hctx.fillStyle = dim;
+  for (const [k, v] of Object.entries(state.counts)) { hctx.fillText(`${k.padEnd(6)} ${String(v).padStart(4)}`, 44, yy); yy += 13; }
+}
+
+/* ---------- background ---------- */
+const bg = $('bg');
+function paintBg(t) {
+  const [a, b, c, d, ink] = PAL[$('palette').value];
+  const hx = 50 + (head.present ? (head.x - .5) * 40 : Math.sin(t * .2) * 10), hy = 50 + (head.present ? (.5 - head.y) * -40 : Math.cos(t * .17) * 10);
+  const s1 = 25 + audio.bass * 40, s2 = 20 + audio.mid * 30;
+  bg.style.background = `radial-gradient(circle at ${hx}% ${hy}%, ${a}cc 0, transparent ${s1}%),` +
+    `radial-gradient(circle at ${100 - hx}% ${100 - hy}%, ${b}bb 0, transparent ${s2}%),` +
+    `radial-gradient(circle at ${50 + Math.sin(t * .3) * 30}% ${50 + Math.cos(t * .23) * 30}%, ${c}66 0, transparent 30%),` +
+    `linear-gradient(${(t * 12) % 360}deg, ${ink}, ${d}22 60%, ${ink})`;
+  bg.style.opacity = $('mode').value === 'hud' ? .35 : 1;
+}
+
+/* ---------- loop ---------- */
+const clock = new THREE.Clock(); let bgTick = 0;
+function resize() {
+  const w = innerWidth, h = innerHeight;
+  camera.aspect = w / h; camera.updateProjectionMatrix(); renderer.setSize(w, h); composer.setSize(w, h);
+  hud.width = w; hud.height = h;
+}
+addEventListener('resize', resize); resize();
+
+function frame() {
+  requestAnimationFrame(frame);
+  const dt = Math.min(clock.getDelta(), .05), t = clock.elapsedTime;
+  const now = window.getAudioContext ? getAudioContext().currentTime : 0;
+  track(); readAudio();
+  hand.x = lerp(hand.x, raw.x, .25); hand.y = lerp(hand.y, raw.y, .25); hand.pinch = lerp(hand.pinch, raw.pinch, .3);
+  for (let i = queue.length - 1; i >= 0; i--) if (queue[i].t <= now + 1 / 60) { fire(queue[i]); queue.splice(i, 1); }
+  state.kick *= Math.exp(-dt * 8); state.snare *= Math.exp(-dt * 8); state.energy *= Math.exp(-dt * 2);
+
+  const cloudOn = $('mode').value !== 'hud';
+  body.visible = face.visible = parts.visible = cloudOn;
+  if (cloudOn) {
+    updateBody(t);
+    face.material.size = .05 + audio.high * .08 + state.snare * .06;
+    // continuous fingertip trails + particle integration
+    for (const tp of hand.tips) if (Math.random() < .6) emit(tp, 2, 1.2 + audio.level * 3, pal[3]);
+    for (let i = 0; i < NP; i++) {
+      if (pLife[i] <= 0) continue; const j = i * 3;
+      pLife[i] -= dt * .9; pVel[j + 1] -= dt * 1.5; pVel[j] *= 1 - dt * .8; pVel[j + 1] *= 1 - dt * .8;
+      pPos[j] += pVel[j] * dt; pPos[j + 1] += pVel[j + 1] * dt; pPos[j + 2] += pVel[j + 2] * dt;
+      if (pLife[i] <= 0) { pPos[j + 2] = -100; }
+    }
+    partGeo.attributes.position.needsUpdate = true; partGeo.attributes.color.needsUpdate = true;
+    parts.material.size = .08 + state.kick * .12;
+    bloom.strength = .7 + audio.bass * .8 + state.kick * .6;
+    scene.rotation.y = lerp(scene.rotation.y, (hand.present ? (hand.x - .5) * .5 : 0) + Math.sin(t * .2) * .08, .05);
+    composer.render();
+  } else renderer.clear();
+  drawHud(t);
+  if ((bgTick += dt) > .05) { bgTick = 0; paintBg(t); }
+}
+frame();
+
+/* ---------- strudel + controls ---------- */
+initStrudel({ prebake: () => Promise.all([samples('github:tidalcycles/dirt-samples'), samples('github:eddyflux/crate'), samples('github:yaxu/clean-breaks')]) });
+status.textContent = 'ready — start camera, then Play';
+const bpm = $('bpm'); const applyTempo = () => { $('bpmV').textContent = bpm.value; if (window.setcps) setcps(bpm.value / 60 / 4); };
+bpm.addEventListener('input', applyTempo);
+$('density').addEventListener('input', e => $('densityV').textContent = e.target.value);
+$('depth').addEventListener('input', e => $('depthV').textContent = (+e.target.value).toFixed(1));
+$('camMix').addEventListener('input', e => $('camMixV').textContent = e.target.value);
+$('palette').addEventListener('change', e => setPalette(e.target.value)); setPalette('ember');
+$('camBtn').onclick = () => startCamera().catch(err => { status.textContent = 'camera: ' + err.message; $('camBtn').disabled = false; });
+$('camStop').onclick = stopCamera;
+$('fold').onclick = e => { $('panel').classList.toggle('folded'); e.target.textContent = $('panel').classList.contains('folded') ? 'Show code' : 'Hide code'; };
+$('play').onclick = async () => {
+  try {
+    const ac = getAudioContext(); if (ac.state !== 'running') await ac.resume(); ensureTap();
+    await evaluate($('code').value); applyTempo(); status.textContent = 'playing';
+  } catch (err) { status.textContent = 'pattern error: ' + err.message; }
+};
+$('stop').onclick = async () => { try { hush(); } catch (_) {} try { await getAudioContext().suspend(); } catch (_) {} queue.length = 0; status.textContent = 'stopped'; };
+$('code').addEventListener('keydown', e => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') $('play').click(); });
+</script>
+</body>
+</html>

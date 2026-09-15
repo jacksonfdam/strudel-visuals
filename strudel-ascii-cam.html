@@ -1,0 +1,425 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>strudel × ascii cam × voice fx</title>
+<style>
+  :root{--ink:#0a1a18;--lo:#0f5a2c;--mid:#22c55e;--hi:#c8ffd8;--acc:#ff7a1a}
+  html,body{margin:0;height:100%;background:var(--ink);color:var(--hi);
+    font:12px/1.45 "IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;overflow:hidden}
+  #ascii{position:fixed;inset:0;z-index:1}
+  #crt{position:fixed;inset:0;z-index:2;pointer-events:none;
+    background:repeating-linear-gradient(0deg,rgba(0,0,0,.18) 0 1px,transparent 1px 3px),
+               radial-gradient(ellipse at center,transparent 60%,rgba(0,0,0,.6) 100%)}
+  .hud{position:fixed;z-index:3;pointer-events:none;color:var(--acc);white-space:pre;opacity:.9}
+  .hud.tl{top:16px;left:18px} .hud.tr{top:16px;right:18px;text-align:right}
+  .hud b{font-weight:400;color:var(--hi)}
+  #panel{position:fixed;z-index:5;right:16px;bottom:16px;width:min(640px,calc(100vw - 32px));
+    background:rgba(10,26,24,.86);border:1px solid var(--lo);padding:10px 12px}
+  #panel textarea{width:100%;box-sizing:border-box;height:170px;resize:vertical;background:transparent;color:var(--hi);
+    border:0;outline:none;font:inherit;line-height:1.5}
+  .row{display:flex;gap:10px;align-items:center;margin-top:8px;flex-wrap:wrap}
+  .row h4{margin:0;font-weight:400;color:var(--mid);width:100%;font-size:11px;letter-spacing:.04em}
+  button{font:inherit;background:transparent;color:var(--acc);border:1px solid var(--acc);padding:4px 12px;cursor:pointer}
+  button:hover,button:focus-visible{background:var(--acc);color:var(--ink);outline:none}
+  button.quiet{color:var(--mid);border-color:var(--lo)}
+  #status{color:var(--mid);margin-left:auto;opacity:.8}
+  label{display:flex;align-items:center;gap:6px;color:var(--mid)}
+  label.slide{flex:1;min-width:150px}
+  label b{font-weight:400;color:var(--acc);min-width:3.5ch;text-align:right}
+  input[type=range]{flex:1;accent-color:var(--acc);height:2px;margin:0}
+  input[type=checkbox]{accent-color:var(--acc);margin:0}
+  input[type=text],select{font:inherit;background:var(--ink);color:var(--hi);border:1px solid var(--lo);padding:3px 6px}
+  input[type=text]{flex:1;min-width:200px}
+  #panel.folded textarea,#panel.folded .row.fx{display:none}
+</style>
+</head>
+<body>
+<canvas id="ascii"></canvas>
+<div id="crt"></div>
+<div class="hud tl" id="hudL"></div>
+<div class="hud tr" id="hudR"></div>
+<video id="cam" autoplay muted playsinline hidden></video>
+
+<!-- playlist: plain-text blocks so the code needs no escaping -->
+<script type="text/plain" data-track="New Order – Blue Monday (cover by Lewis, bakery)">
+/*
+  @title New Order - Blue Monday (cover / remix)
+  @by Lewis
+*/
+setcpm(130/4)
+
+const kick1 = sound("<[bd bd [bd*4] [bd*4]] [bd*4]>").bank("linn").decay(0.15)
+const kick2 = sound("[bd*4]").bank("linn").decay(.15)
+
+const hats1 = sound("[oh oh*2]*4").bank("dmx").decay(.1).gain(.12)
+const hats2 = sound("[- oh]*4").bank("dmx").decay(.2).sustain(0.1).gain(.12)
+
+const snare = stack(
+  sound("[- sd]*2").bank("linn").gain(.5),
+  sound("[- cp]*2").bank("linn").gain(.1)
+)
+
+const drums1 = stack(kick1,hats1,snare)
+const drums2 = stack(kick2,hats2,snare)
+
+const drums3 = stack(
+  sound("bd bd bd bd -").bank("linn").decay(0.15),
+  sound("oh oh oh oh -").bank("dmx").decay(0.2).sustain(0.1).gain(0.2)
+)
+
+const bass1 = stack(
+  note("<<[f1 f2*2]*2 [g1 g2*2]*2> [c1 c2*2]*2 [d1 d2*2]*2 [d1 d2*2]*2>*2"),
+).sound("<sine, gm_synth_bass_1>").decay(.2).sustain(.1)
+
+const bass2 = stack(
+  note("<<[f1 f2]*2 [g1 g2]*2> [c1 c2]*2 [d1 d2]*2 [d1 d2]*2>*2"),
+).sound("<sine, gm_synth_bass_1>").decay(.2).sustain(.4)
+
+const synth = stack(
+  n("<[[2 ~] [2 ~] 2 3] [[3 ~] [3 ~] 3 3]>@4 [-1 ~] -1 -1 [0 ~] 0 0 [0 ~] 0 0 [0 ~] 0 0"),
+).sound("<gm_lead_2_sawtooth>").slow(2).scale("d4:minor").attack(.05).hpf("<1000 2000>*12").gain(".4")
+
+stack(
+  arrange([16,kick1],[16,drums1],[2,drums3],[16,drums2],[1,silence]).room(0.1),
+  arrange([8,silence],[24,synth],[19,silence]).room(0.05),
+  arrange([16,silence],[16,bass1],[2,silence],[16,bass2],[1,silence])
+  )._pianoroll()
+</script>
+<script type="text/plain" data-track="eddyflux – tupper class (bakery)">
+// "tupper class" @by eddyflux
+setcps(68/60/4)
+
+stack(
+  s("loop4/4").fit()
+  .layer(
+    x=>x
+      .chop("64 [32 64]")
+      .juxBy(.6, rev)
+      .hpf(500)
+      .dec(sine.range(.05,.18).slow(8))
+      .room(.5).sometimes(mul(speed("2 | -2")))
+      .shape(.6).postgain(sine.range(0,.8).slow(16))
+    ,
+    x=>x.chop(64).lpf(400)
+      .shape(.6).cut(4)
+      .dec(.2).postgain(.9)
+      .mask("<0!4 1!16>")
+  )
+  ,
+  s("riffin").fit().shape(.2).chop(32).dec(.1).postgain(.6)
+  .sometimesBy("0 [0 .5] 0 0", x=>x.set.squeeze(gain(".9 .6 .2 .1")).room(.3))
+  .sometimesBy("0 [0  0] 0 .5", x=>x.mul(speed("-2")))
+  .hurry("<.5!4 1!16>")
+  ,
+  s("useme/2").fit()
+  .chop("<16 32>/32")
+  .sometimesBy("0 [.2 0]",ply("3"))
+  .dec(.19).room(.4).cut(9)
+  .hpf(800)
+  .mask("[1!4 0 1 1 0]*2")
+  ,
+  s("[bd rim:1 [~ bd] rim:2]*2").bank('crate')
+)
+  .reset("<x@3 x*[4 [8 [16 32]]] x@16>")
+  .late("[0 .002]*16")
+</script>
+<script type="text/plain" data-track="voice-driven (uses the mic)">
+// `mic.level` (0..1) and `mic.pitch` (Hz, 0 when silent) come from the microphone.
+setcpm(120/4)
+stack(
+  s("bd*2 [~ bd] bd ~").bank("RolandTR909"),
+  s("~ sd ~ [sd ~ sd]").bank("RolandTR909").room(.3),
+  s("hh*8").bank("RolandTR909").gain(signal(() => .3 + mic.level * .8)),       // louder voice → louder hats
+  note("<c2 eb2 g2 bb1>*4").s("sawtooth").dec(.25)
+    .lpf(signal(() => 150 + mic.level * 5000))                                 // voice → filter sweep
+    .gain(.8),
+  note(signal(() => mic.pitch > 60 ? mic.pitch : 0).fmap(hz => hz ? 69 + 12 * Math.log2(hz / 440) : 0))
+    .s("triangle").dec(.4).gain(signal(() => mic.pitch > 60 ? .5 : 0)).segment(8) // sing → it follows you
+    .room(.6),
+)
+</script>
+
+<div id="panel">
+  <textarea id="code" spellcheck="false"></textarea>
+  <div class="row">
+    <label>playlist <select id="track"></select></label>
+    <button id="prev" class="quiet">‹</button><button id="next" class="quiet">›</button>
+    <label><input type="checkbox" id="autoNext" checked> auto-advance</label>
+    <label class="slide">seconds/track <input id="dur" type="range" min="30" max="300" step="10" value="120"> <b id="durV">120</b></label>
+  </div>
+  <div class="row">
+    <input type="text" id="addUrl" placeholder="paste a strudel.cc link or #hash from the Bakery">
+    <button id="addBtn" class="quiet">Add to playlist</button>
+  </div>
+  <div class="row fx">
+    <h4>ascii</h4>
+    <label class="slide">cell <input id="cell" type="range" min="8" max="24" step="1" value="14"> <b id="cellV">14</b></label>
+    <label class="slide">contrast <input id="contrast" type="range" min=".5" max="3" step=".1" value="1.4"> <b id="contrastV">1.4</b></label>
+    <label>palette <select id="palette"><option value="matrix">matrix</option><option value="amber">amber</option><option value="cyan">cyan</option><option value="blood">blood</option></select></label>
+    <label><input type="checkbox" id="noise" checked> bg noise</label>
+  </div>
+  <div class="row fx">
+    <h4>voice / ambient fx (headphones recommended)</h4>
+    <label><input type="checkbox" id="monitor"> monitor to speakers</label>
+    <label class="slide">drive <input id="drive" type="range" min="0" max="1" step=".05" value=".6"> <b id="driveV">.6</b></label>
+    <label class="slide">ring <input id="ring" type="range" min="0" max="400" step="5" value="0"> <b id="ringV">0</b></label>
+    <label class="slide">delay <input id="delay" type="range" min="0" max="1" step=".05" value=".35"> <b id="delayV">.35</b></label>
+    <label class="slide">feedback <input id="fb" type="range" min="0" max=".95" step=".05" value=".5"> <b id="fbV">.5</b></label>
+    <label class="slide">pitch <input id="pitch" type="range" min="-12" max="12" step="1" value="0"> <b id="pitchV">0</b></label>
+  </div>
+  <div class="row">
+    <button id="camBtn">Camera</button>
+    <button id="micBtn">Mic</button>
+    <button id="play">Play</button>
+    <button id="stop" class="quiet">Stop</button>
+    <button id="fold" class="quiet">Hide code</button>
+    <span id="status">loading samples…</span>
+  </div>
+</div>
+
+<script>
+(() => { // tap: anything strudel wires to the speakers also feeds our analyser
+  const orig = AudioNode.prototype.connect;
+  AudioNode.prototype.connect = function (dest, ...rest) {
+    if (dest instanceof AudioDestinationNode && window.__tap && this !== window.__tap && !this.__isFx) { try { orig.call(this, window.__tap); } catch (_) {} }
+    return orig.call(this, dest, ...rest);
+  };
+})();
+</script>
+<script src="https://unpkg.com/@strudel/web@1.1.0"></script>
+
+<script type="module">
+const $ = id => document.getElementById(id);
+const lerp = (a, b, k) => a + (b - a) * k;
+const status = $('status');
+
+/* ---------- shared live state ---------- */
+window.mic = { level: 0, pitch: 0, on: false };
+window.audio = { bass: 0, mid: 0, high: 0, level: 0 };
+
+/* ---------- playlist ---------- */
+const playlist = [...document.querySelectorAll('script[data-track]')].map(s => ({ title: s.dataset.track, code: s.textContent.trim() }));
+let cur = 0, trackTimer = 0;
+const trackSel = $('track'), codeEl = $('code');
+function refreshList() { trackSel.innerHTML = playlist.map((p, i) => `<option value="${i}" ${i === cur ? 'selected' : ''}>${i + 1}. ${p.title}</option>`).join(''); }
+function load(i, autoplay = false) { cur = (i + playlist.length) % playlist.length; codeEl.value = playlist[cur].code; refreshList(); trackTimer = 0; if (autoplay) $('play').click(); }
+refreshList(); load(0);
+
+// strudel.cc share links carry the code as base64 in the #hash
+function decodeShare(s) {
+  const h = s.includes('#') ? s.slice(s.indexOf('#') + 1) : s;
+  const bin = atob(decodeURIComponent(h));
+  try { return decodeURIComponent(escape(bin)); } catch (_) { return bin; }
+}
+$('addBtn').onclick = () => {
+  try {
+    const code = decodeShare($('addUrl').value.trim());
+    const m = code.match(/@title\s+([^\n*]+)/) || code.match(/^\/\/\s*(.+)$/m);
+    playlist.push({ title: (m ? m[1].trim() : 'untitled') + ' (added)', code }); $('addUrl').value = '';
+    load(playlist.length - 1); status.textContent = 'added — press Play';
+  } catch (err) { status.textContent = 'could not decode link: ' + err.message; }
+};
+
+// make bakery code runnable in @strudel/web: no soundfonts, no draw context
+function adapt(code) {
+  return code
+    .replace(/\.\_?(pianoroll|punchcard|scope|spiral|pitchwheel|spectrum|wordfall|markcss|tscope|fscope)\([^)]*\)/g, '')
+    .replace(/gm_[a-z0-9_]+/g, name => /saw|lead|bass|brass|guitar/.test(name) ? 'sawtooth' : /square|organ|clav/.test(name) ? 'square' : 'triangle')
+    .replace(/^\s*samples\([^)]*\)\s*$/gm, '');   // the packs below are pre-loaded
+}
+
+/* ---------- ascii renderer ---------- */
+const cv = $('ascii'), ctx = cv.getContext('2d');
+const video = $('cam');
+const off = document.createElement('canvas'), octx = off.getContext('2d', { willReadFrequently: true });
+const RAMPS = { bg: '+*x', lo: '.,:;-_`\'', mid: '~=/\\|o0^¬', hi: '#%HMB8', top: '@Q&' };
+const PALS = {
+  matrix: { ink: '#0a1a18', lo: [15, 90, 44], mid: [34, 197, 94], hi: [200, 255, 216], top: [255, 255, 255] },
+  amber:  { ink: '#0b0700', lo: [90, 50, 0], mid: [255, 176, 0], hi: [255, 230, 160], top: [255, 255, 255] },
+  cyan:   { ink: '#02101a', lo: [0, 70, 90], mid: [0, 200, 230], hi: [180, 245, 255], top: [255, 255, 255] },
+  blood:  { ink: '#120204', lo: [90, 10, 20], mid: [220, 40, 60], hi: [255, 190, 190], top: [255, 255, 255] },
+};
+let pal = PALS.matrix;
+const state = { kick: 0, snare: 0, invert: 0, scramble: 0 };
+let cols = 0, rows = 0, seedGrid = [];
+function resize() {
+  cv.width = innerWidth; cv.height = innerHeight;
+  const cell = +$('cell').value; cols = Math.ceil(cv.width / cell); rows = Math.ceil(cv.height / cell);
+  off.width = cols; off.height = rows;
+  seedGrid = Array.from({ length: cols * rows }, () => Math.random());
+}
+addEventListener('resize', resize); $('cell').addEventListener('input', resize); resize();
+const rgb = (c, k = 1) => `rgb(${(c[0] * k) | 0},${(c[1] * k) | 0},${(c[2] * k) | 0})`;
+
+function drawAscii(t) {
+  const cell = +$('cell').value, contrast = +$('contrast').value, noiseOn = $('noise').checked;
+  ctx.fillStyle = pal.ink; ctx.fillRect(0, 0, cv.width, cv.height);
+  ctx.font = `${cell - 1}px ui-monospace, Menlo, monospace`; ctx.textBaseline = 'top';
+  const haveCam = video.srcObject && video.readyState >= 2;
+  let img = null;
+  if (haveCam) {
+    // mirrored, cover-fit downsample to cols×rows
+    const va = video.videoWidth / video.videoHeight, ca = cols / rows;
+    let sw = video.videoWidth, sh = video.videoHeight, sx = 0, sy = 0;
+    if (va > ca) { sw = sh * ca; sx = (video.videoWidth - sw) / 2; } else { sh = sw / ca; sy = (video.videoHeight - sh) / 2; }
+    octx.save(); octx.scale(-1, 1); octx.drawImage(video, sx, sy, sw, sh, -cols, 0, cols, rows); octx.restore();
+    img = octx.getImageData(0, 0, cols, rows).data;
+  }
+  const boost = 1 + audio.bass * .8 + state.kick * .6;
+  const warp = mic.level * 6 + state.snare * 8;             // voice bends the rows
+  for (let r = 0; r < rows; r++) {
+    const dx = warp ? Math.sin(r * .35 + t * 9) * warp : 0;
+    for (let c = 0; c < cols; c++) {
+      const i = r * cols + c, seed = seedGrid[i];
+      let lum = 0;
+      if (img) { const j = i * 4; lum = (img[j] * .3 + img[j + 1] * .59 + img[j + 2] * .11) / 255; }
+      lum = Math.min(1, Math.max(0, (lum - .5) * contrast + .5) * boost);
+      if (state.invert) lum = 1 - lum;
+      if (state.scramble > 0 && seed < state.scramble) lum = seed;
+      let ch, color;
+      if (lum < .12) {                                        // background: the "+ * x" field
+        if (!noiseOn) continue;
+        const flick = (seed * 7 + t * (.4 + audio.high * 3)) % 1;
+        ch = RAMPS.bg[((seed * 97 + Math.floor(t * (1 + audio.high * 6) + seed * 10)) | 0) % 3];
+        color = rgb(pal.lo, .55 + flick * .5 + audio.mid * .4);
+      } else if (lum < .3) { ch = RAMPS.lo[(seed * RAMPS.lo.length) | 0]; color = rgb(pal.lo, 1.2); }
+      else if (lum < .55) { ch = RAMPS.mid[(seed * RAMPS.mid.length) | 0]; color = rgb(pal.mid, .8 + lum * .4); }
+      else if (lum < .8) { ch = RAMPS.hi[(seed * RAMPS.hi.length) | 0]; color = rgb(pal.hi, .9); }
+      else { ch = RAMPS.top[(seed * RAMPS.top.length) | 0]; color = rgb(pal.top); }
+      ctx.fillStyle = color; ctx.fillText(ch, c * cell + dx, r * cell);
+    }
+  }
+}
+
+/* ---------- audio analysis: music tap + microphone fx chain ---------- */
+let ac, tap, freq, micA, micWave, micIn, fx = null;
+function ensureTap() {
+  if (tap || !window.getAudioContext) return;
+  ac = getAudioContext(); tap = ac.createAnalyser(); tap.fftSize = 1024; tap.smoothingTimeConstant = .8;
+  freq = new Uint8Array(tap.frequencyBinCount); window.__tap = tap;
+}
+function readMusic() {
+  if (!tap) return; tap.getByteFrequencyData(freq);
+  const band = (a, b) => { let s = 0; for (let i = a; i < b; i++) s += freq[i]; return s / (b - a) / 255; };
+  audio.bass = lerp(audio.bass, band(1, 8), .5); audio.mid = lerp(audio.mid, band(8, 60), .4); audio.high = lerp(audio.high, band(60, 300), .4);
+  audio.level = (audio.bass + audio.mid + audio.high) / 3;
+  // beat-ish detection from the tap (works for any playlist track, no vis() needed)
+  if (audio.bass > .55 && state.kick < .3) state.kick = 1;
+  if (audio.high > .5 && state.snare < .2 && Math.random() < .3) { state.snare = 1; state.invert = Math.random() < .3 ? 1 : 0; }
+}
+
+function shaper(amount) {
+  const n = 2048, curve = new Float32Array(n), k = amount * 100;
+  for (let i = 0; i < n; i++) { const x = i * 2 / n - 1; curve[i] = (3 + k) * x * 20 * (Math.PI / 180) / (Math.PI + k * Math.abs(x)); }
+  return curve;
+}
+async function startMic() {
+  ensureTap(); if (!ac) { status.textContent = 'press Play once first (audio context)'; return; }
+  if (ac.state !== 'running') await ac.resume();
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: false, autoGainControl: false } });
+  micIn = ac.createMediaStreamSource(stream);
+  // chain: hpf → drive → ring mod → pitch (delay-line vibrato) → delay+feedback → lpf → wet
+  const hp = ac.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 120;
+  const pre = ac.createGain(); pre.gain.value = 1.5;
+  const ws = ac.createWaveShaper(); ws.curve = shaper(.6); ws.oversample = '2x';
+  const ring = ac.createGain(); ring.gain.value = 1;
+  const osc = ac.createOscillator(); osc.frequency.value = 0; const oscG = ac.createGain(); oscG.gain.value = 0; osc.connect(oscG).connect(ring.gain); osc.start();
+  const pitchD = ac.createDelay(1); pitchD.delayTime.value = .02;
+  const lfo = ac.createOscillator(); lfo.type = 'sawtooth'; lfo.frequency.value = 0; const lfoG = ac.createGain(); lfoG.gain.value = 0; lfo.connect(lfoG).connect(pitchD.delayTime); lfo.start();
+  const dl = ac.createDelay(2); dl.delayTime.value = .35; const fb = ac.createGain(); fb.gain.value = .5;
+  const lp = ac.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 3200;
+  const wet = ac.createGain(); wet.gain.value = 1; const out = ac.createGain(); out.gain.value = 0; out.__isFx = true;
+  micIn.connect(hp).connect(pre).connect(ws).connect(ring).connect(pitchD).connect(lp).connect(wet);
+  pitchD.connect(dl); dl.connect(fb).connect(dl); dl.connect(lp);
+  micA = ac.createAnalyser(); micA.fftSize = 2048; micWave = new Float32Array(micA.fftSize);
+  wet.connect(micA); wet.connect(out); out.connect(ac.destination);
+  fx = { ws, oscG, osc, lfo, lfoG, dl, fb, out };
+  applyFx(); mic.on = true; $('micBtn').textContent = 'Mic on'; $('micBtn').disabled = true;
+  status.textContent = 'mic running — visuals react to your voice';
+}
+function applyFx() {
+  if (!fx) return;
+  fx.ws.curve = shaper(+$('drive').value);
+  const ringHz = +$('ring').value; fx.osc.frequency.value = ringHz; fx.oscG.gain.value = ringHz ? .9 : 0;
+  fx.dl.delayTime.value = +$('delay').value; fx.fb.gain.value = +$('fb').value;
+  const semis = +$('pitch').value;                 // crude pitch shift: sawtooth-modulated delay line
+  fx.lfo.frequency.value = semis === 0 ? 0 : Math.abs(semis) * 3; fx.lfoG.gain.value = semis === 0 ? 0 : -Math.sign(semis) * .01;
+  fx.out.gain.value = $('monitor').checked ? .9 : 0;
+}
+function readVoice() {
+  if (!micA) return;
+  micA.getFloatTimeDomainData(micWave);
+  let rms = 0; for (let i = 0; i < micWave.length; i++) rms += micWave[i] * micWave[i];
+  rms = Math.sqrt(rms / micWave.length);
+  mic.level = lerp(mic.level, Math.min(1, rms * 6), .3);
+  // pitch: autocorrelation over 70–800 Hz
+  if (rms > .015) {
+    const sr = ac.sampleRate; let best = -1, bestC = 0;
+    for (let lag = (sr / 800) | 0; lag < (sr / 70) | 0; lag++) {
+      let c = 0; for (let i = 0; i < 1024; i++) c += micWave[i] * micWave[i + lag];
+      if (c > bestC) { bestC = c; best = lag; }
+    }
+    if (best > 0) mic.pitch = lerp(mic.pitch || sr / best, sr / best, .4);
+  } else mic.pitch = 0;
+  state.scramble = Math.max(state.scramble, mic.level > .6 ? (mic.level - .6) : 0);
+}
+
+/* ---------- camera ---------- */
+$('camBtn').onclick = async () => {
+  try {
+    if (video.srcObject) { video.srcObject.getTracks().forEach(t => t.stop()); video.srcObject = null; $('camBtn').textContent = 'Camera'; return; }
+    video.srcObject = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480, facingMode: 'user' } });
+    await video.play(); $('camBtn').textContent = 'Camera off';
+  } catch (err) { status.textContent = 'camera: ' + err.message; }
+};
+$('micBtn').onclick = () => startMic().catch(err => status.textContent = 'mic: ' + err.message);
+['drive', 'ring', 'delay', 'fb', 'pitch'].forEach(id => $(id).addEventListener('input', e => { $(id + 'V').textContent = e.target.value; applyFx(); }));
+$('monitor').addEventListener('change', applyFx);
+['cell', 'contrast', 'dur'].forEach(id => $(id).addEventListener('input', e => $(id + 'V').textContent = e.target.value));
+$('palette').addEventListener('change', e => { pal = PALS[e.target.value]; document.documentElement.style.setProperty('--ink', pal.ink);
+  document.documentElement.style.setProperty('--mid', rgb(pal.mid)); document.documentElement.style.setProperty('--hi', rgb(pal.hi)); document.documentElement.style.setProperty('--lo', rgb(pal.lo)); });
+
+/* ---------- loop ---------- */
+let last = performance.now(), hudTick = 0, playing = false;
+function frame(now) {
+  requestAnimationFrame(frame);
+  const dt = Math.min((now - last) / 1000, .05); last = now; const t = now / 1000;
+  readMusic(); readVoice();
+  state.kick *= Math.exp(-dt * 7); state.snare *= Math.exp(-dt * 8); state.scramble *= Math.exp(-dt * 5);
+  if (state.snare < .3) state.invert = 0;
+  drawAscii(t);
+  if (playing && $('autoNext').checked && (trackTimer += dt) > +$('dur').value) load(cur + 1, true);
+  if ((hudTick += dt) > .1) {
+    hudTick = 0;
+    $('hudL').innerHTML = `track  <b>${cur + 1}/${playlist.length}</b>\n<b>${playlist[cur].title}</b>\nnext in <b>${playing ? Math.max(0, +$('dur').value - trackTimer).toFixed(0) : '—'}</b>s`;
+    $('hudR').innerHTML = `bass  <b>${audio.bass.toFixed(2)}</b>\nmid   <b>${audio.mid.toFixed(2)}</b>\nhigh  <b>${audio.high.toFixed(2)}</b>\nvoice <b>${mic.level.toFixed(2)}</b>\npitch <b>${mic.pitch ? mic.pitch.toFixed(0) + ' Hz' : '—'}</b>`;
+  }
+}
+requestAnimationFrame(frame);
+
+/* ---------- strudel ---------- */
+const ds = 'https://raw.githubusercontent.com/felixroos/dough-samples/main';
+initStrudel({
+  prebake: () => Promise.all([
+    samples(`${ds}/tidal-drum-machines.json`),     // .bank("linn"), "dmx", "RolandTR909" …
+    samples(`${ds}/Dirt-Samples.json`),
+    samples('github:eddyflux/crate'), samples('github:eddyflux/wax'), samples('github:yaxu/clean-breaks'),
+  ]),
+});
+status.textContent = 'ready — pick a track, press Play';
+trackSel.onchange = e => load(+e.target.value, playing);
+$('prev').onclick = () => load(cur - 1, playing); $('next').onclick = () => load(cur + 1, playing);
+$('fold').onclick = e => { $('panel').classList.toggle('folded'); e.target.textContent = $('panel').classList.contains('folded') ? 'Show code' : 'Hide code'; };
+$('play').onclick = async () => {
+  try {
+    const a = getAudioContext(); if (a.state !== 'running') await a.resume(); ensureTap();
+    await evaluate(adapt(codeEl.value)); playing = true; trackTimer = 0; status.textContent = 'playing: ' + playlist[cur].title;
+  } catch (err) { status.textContent = 'pattern error: ' + err.message; }
+};
+$('stop').onclick = async () => { try { hush(); } catch (_) {} playing = false; status.textContent = 'stopped'; };
+codeEl.addEventListener('keydown', e => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') $('play').click(); });
+</script>
+</body>
+</html>
